@@ -22,3 +22,4 @@ if not _ASTROPY_SETUP_:
     # For egg_info test builds to pass, put package imports here.
     from .nustarclock import *
     from .utils import *
+    from .barycorr import *

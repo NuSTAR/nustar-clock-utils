@@ -3,7 +3,7 @@ import numpy as np
 import os
 import pytest
 from nuclockutils import read_clock_offset_table, read_freq_changes_table
-from nuclockutils import get_orbital_functions, read_temptable
+from nuclockutils import read_temptable, apply_clock_correction
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
@@ -27,11 +27,12 @@ class TestExecution(object):
         table = read_freq_changes_table(filter_bad=False)
         assert len(tablefilt) < len(table)
 
-    def test_read_orb_funcs(self):
-        res = get_orbital_functions(self.orbfile)
-
     def test_read_temptables(self):
         table = read_temptable(mjdstart=self.t0, mjdstop=self.t1)
         table = read_temptable(temperature_file=self.tempfile,
                                mjdstart=self.t0, mjdstop=self.t1)
+
+    def test_fun_from_file(self):
+        outfile = apply_clock_correction(self.orbfile, outfile=None)
+        assert os.path.exists(outfile)
 

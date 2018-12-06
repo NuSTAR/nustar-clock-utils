@@ -4,22 +4,12 @@ import glob
 import os
 import numpy as np
 from astropy.table import Table
-import matplotlib.pyplot as plt
-from nustar_tempcorr import read_clockfile, get_clock_correction
-from nustar_tempcorr.utils import sec_to_mjd
-import copy
-from matplotlib.gridspec import GridSpec
-import seaborn as sns
 import pandas as pd
-from astropy.coordinates import SkyCoord
-from astropy import units as u
 from astropy.time import Time
 
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
-from pint.models import get_model
-from pint.event_toas import load_fits_TOAs
-from .utils import NUSTAR_MJDREF, splitext_improved
+from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
 from astropy.io import fits
 
 
@@ -157,53 +147,6 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     return freq_changes_table
 
 
-class OrbitalFunctions():
-    lat_fun = None
-    lon_fun = None
-    alt_fun = None
-    lst_fun = None
-
-
-def get_orbital_functions(orbfile):
-    from astropy.time import Time
-    import astropy.units as u
-    orbtable = Table.read(orbfile)
-    # t = Time(100.0, format='mjd')
-    mjdref = orbtable.meta['MJDREFF'] + orbtable.meta['MJDREFI']
-    # print(mjdref)
-    # print(orbtable['TIME'] / 86400 + mjdref)
-    times = Time(np.array(orbtable['TIME'] / 86400 + mjdref), format='mjd')
-    if 'GEODETIC' in orbtable.colnames:
-        geod = np.array(orbtable['GEODETIC'])
-        lat, lon, alt = geod[:, 0] * u.deg, geod[:, 1] * u.deg, geod[:,
-                                                                2] * u.m
-    else:
-        geod = np.array(orbtable['POLAR'])
-        lat, lon, alt = (geod[:, 0] * u.rad).to(u.deg), (
-                    geod[:, 1] * u.rad).to(u.deg), geod[:, 2] * 1000 * u.m
-
-    lat_fun = interp1d(times.mjd, lat, bounds_error=False,
-                       fill_value='extrapolate')
-    lon_fun = interp1d(times.mjd, lon, bounds_error=False,
-                       fill_value='extrapolate')
-    alt_fun = interp1d(times.mjd, alt, bounds_error=False,
-                       fill_value='extrapolate')
-    gst = times.sidereal_time('apparent', 'greenwich')
-    lst = lon.to(u.hourangle) + gst.to(u.hourangle)
-    lst[lst.value > 24] -= 24 * u.hourangle
-    lst[lst.value < 0] += 24 * u.hourangle
-    lst_fun = interp1d(times.mjd, lst, bounds_error=False,
-                       fill_value='extrapolate')
-
-    orbfunc = OrbitalFunctions()
-    orbfunc.lat_fun = lat_fun
-    orbfunc.lon_fun = lon_fun
-    orbfunc.alt_fun = alt_fun
-    orbfunc.lst_fun = lst_fun
-
-    return orbfunc
-
-
 def _filter_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
     try:
         from datetime import timezone
@@ -288,7 +231,7 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None):
 def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
                       ppm0=13.965, slope=0.0733, t0=13):
-    table_times = temptable['met'],
+    table_times = temptable['met']
     if met_start is None:
         met_start = table_times[0]
     if met_stop is None:
@@ -317,9 +260,12 @@ def calculate_temperature_correction(met_start, met_stop,
                                mjdstop=mjdstop + 5,
                                temperature_file=temperature_file)
     freq_changes_table = read_freq_changes_table()
+    allfreqtimes = np.array(freq_changes_table['met'])
+    allfreqtimes = np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
+
     met_intervals = list(
-        zip(freq_changes_table['met'][:-1], freq_changes_table['met'][1:]))
-    met_intervals = np.concatenate([met_intervals, met_intervals[-1] + 86400])
+        zip(allfreqtimes[:-1], allfreqtimes[1:]))
+
     divisors = freq_changes_table['divisor']
     last_corr = 0
     last_time = met_intervals[0][0]
@@ -415,7 +361,8 @@ def create_clockfile(met_start, met_stop):
 
 
 def apply_clock_correction(events_file, outfile=None):
-    ext = splitext_improved(events_file)[1]
+    ext = splitext_improved(os.path.basename(events_file))[1]
+    print(ext)
     if outfile is None:
         outfile = events_file.replace(ext, "_tc" + ext)
     if outfile == events_file:
