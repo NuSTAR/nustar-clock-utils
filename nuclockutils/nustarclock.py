@@ -362,7 +362,6 @@ def create_clockfile(met_start, met_stop):
 
 def apply_clock_correction(events_file, outfile=None):
     ext = splitext_improved(os.path.basename(events_file))[1]
-    print(ext)
     if outfile is None:
         outfile = events_file.replace(ext, "_tc" + ext)
     if outfile == events_file:
