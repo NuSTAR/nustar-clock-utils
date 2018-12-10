@@ -11,6 +11,7 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
 from astropy.io import fits
+import tqdm
 
 
 curdir = os.path.abspath(os.path.dirname(__file__))
@@ -210,10 +211,29 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
     return temptable
 
 
+def read_saved_temptable(mjdstart=None, mjdstop=None,
+                         temperature_file='temptable.hdf5'):
+    table = Table.read(temperature_file)
+    if mjdstart is None and mjdstop is None:
+        return table
+
+    if mjdstart is None:
+        mjdstart = table['mjd'][0]
+    if mjdstop is None:
+        mjdstop = table['mjd'][-1]
+
+    good = (table['mjd'] >= mjdstart - 10)&(table['mjd'] <= mjdstop + 10)
+    return table[good]
+
+
+
 def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None):
     if temperature_file is None or temperature_file.endswith('.csv'):
         return read_csv_temptable(mjdstart, mjdstop,
                                   temperature_file)
+    else:
+        return read_saved_temptable(mjdstart, mjdstop,
+                                    temperature_file)
 
 
 def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
@@ -282,7 +302,7 @@ def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
 
 def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
-                      ):
+                      debug=False):
     table_times = temptable['met']
     if met_start is None:
         met_start = table_times[0]
@@ -306,18 +326,19 @@ def temperature_delay(temptable, divisor,
     delay = np.cumsum(np.diff(times_fine) * clock_rate_corr[:-1])
     delay_old = np.cumsum(np.diff(times_fine) * clock_rate_corr_old[:-1])
 
-    import matplotlib.pyplot as plt
-    plt.plot(times_fine[1:], delay, label="New")
-    plt.plot(times_fine[1:], delay_old, label="Old")
-    plt.legend()
-    plt.show()
+    if debug:
+        import matplotlib.pyplot as plt
+        plt.plot(times_fine[1:], delay, label="New")
+        plt.plot(times_fine[1:], delay_old, label="Old")
+        plt.legend()
+        plt.savefig(f"{met_start}-{met_stop}_delaycomparison.png")
     return interp1d(times_fine[:-1], delay, fill_value='extrapolate',
                     bounds_error=False)
 
 
 def calculate_temperature_correction(met_start, met_stop,
                                      temperature_file=None,
-                                     adjust=None):
+                                     adjust=False):
     mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
     temptable = read_temptable(mjdstart=mjdstart - 5,
                                mjdstop=mjdstop + 5,
@@ -335,11 +356,13 @@ def calculate_temperature_correction(met_start, met_stop,
 
     data = pd.DataFrame()
 
-    for i, met_intv in enumerate(met_intervals):
+    for i, met_intv in tqdm.tqdm(enumerate(met_intervals),
+                                 total=len(met_intervals)):
         if met_intv[1] < met_start:
             continue
         if met_intv[0] > met_stop:
             break
+
         start, stop = met_intv
         good_temps = (temptable['met'] >= start - 20) & (
                       temptable['met'] <= stop + 20)
