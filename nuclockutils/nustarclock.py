@@ -81,18 +81,6 @@ def _look_for_freq_change_file():
     return fchange_files[-1]
 
 
-# def bary_eventlist(eventfile, orbfile, parfile, outfile):
-#     if os.path.exists(outfile):
-#         print(f'{outfile} exists, skipping')
-#         return outfile
-#     plotfile = outfile.replace('.evt', '') + '.png'
-#     photonphase(
-#         f'{eventfile} {parfile} --orbfile {orbfile} --absphase --barytime --outfile {outfile} --plot --plotfile {plotfile}'.split(
-#             ' '))
-#
-#     return outfile
-
-
 def read_clock_offset_table(clockoffset_file=None):
     """
     Parameters
@@ -228,9 +216,73 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None):
                                   temperature_file)
 
 
+def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
+                    ppm_vs_time_pars=None, old_version=False):
+    """Improved clock model
+
+    Original IDL function by Craig Markwardt:
+
+    temperature0 = 13.5 ;; [degC]
+    x = temperature at epoch ;; [degC]
+    year = epoch time expressed in calendar years (2016.0 = Jan 1.0, 2016)
+    p = [1.3930859254716697D+01,-7.3929902867262087D-02,1.4498257975709195D-03,-3.7891186658656098D-03,2.5104748381788913D-02,  1.9180710395375647D-01]
+    function clock_ppm_model, x, p, year=year, temperature0=temp0
+      temp = (x-temp0)
+      ftemp = P[0] + P[1]*temp + P[2]*temp^2 ;; Temperature dependence
+      t = (year-2012.5d)
+      flongterm = P[3]*t - P[4]*exp(-t/P[5])
+      return, ftemp + flongterm
+    end
+
+    Parameters
+    ----------
+    time : np.array of floats
+        Times in MET
+    temperature : np.array of floats
+        TCXO Temperatures in C
+    T0 : float
+        Reference temperature
+    ppm_vs_T_pars : list
+        parameters of the ppm-temperature relation
+    ppm_vs_T_pars : list
+        parameters of the ppm-time relation (long-term clock decay)
+
+    """
+    if ppm_vs_T_pars is None:
+        ppm_vs_T_pars = \
+            [1.3930859254716697e+1, -7.3929902867262087e-2,
+             1.4498257975709195e-3]
+        if old_version:
+            ppm_vs_T_pars = [13.965, -0.0733, 0]
+            T0 = 13
+
+    if ppm_vs_time_pars is None:
+        ppm_vs_time_pars = \
+            [-3.7891186658656098e-3,
+             2.5104748381788913e-2, 1.9180710395375647e-1]
+        # I want time in days
+        ppm_vs_time_pars[0] /= 365.25
+        ppm_vs_time_pars[2] *= 365.25
+        if old_version:
+            ppm_vs_time_pars = [0, 0, 1]
+
+    temp = (temperature - T0)
+    ftemp = ppm_vs_T_pars[0] + ppm_vs_T_pars[1] * temp + \
+                ppm_vs_T_pars[2]*temp**2 # Temperature dependence
+
+    mjd = sec_to_mjd(time)
+    # year 2012.5 = MJD 56109.999994212965
+    t = (mjd - 56109.999994212965)
+
+    flongterm = \
+        ppm_vs_time_pars[0]*t - ppm_vs_time_pars[1] * np.exp(-t / ppm_vs_time_pars[2])
+
+    return ftemp + flongterm
+
+
 def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
-                      ppm0=13.965, slope=0.0733, t0=13):
+                      ):
     table_times = temptable['met']
     if met_start is None:
         met_start = table_times[0]
@@ -243,11 +295,22 @@ def temperature_delay(temptable, divisor,
 
     times_fine = np.arange(met_start, met_stop, 0.2)
 
-    ppm_mod = ppm0 - slope * (temp_fun(times_fine) - t0)
+    ppm_mod = clock_ppm_model(times_fine, temp_fun(times_fine))
+    ppm_mod_old = clock_ppm_model(times_fine, temp_fun(times_fine),
+                                  old_version=True)
+
+    # ppm_mod = ppm0 - slope * (temp_fun(times_fine) - t0)
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
+    clock_rate_corr_old = (1 + ppm_mod_old / 1000000) * 24000000 / divisor - 1
 
     delay = np.cumsum(np.diff(times_fine) * clock_rate_corr[:-1])
+    delay_old = np.cumsum(np.diff(times_fine) * clock_rate_corr_old[:-1])
 
+    import matplotlib.pyplot as plt
+    plt.plot(times_fine[1:], delay, label="New")
+    plt.plot(times_fine[1:], delay_old, label="Old")
+    plt.legend()
+    plt.show()
     return interp1d(times_fine[:-1], delay, fill_value='extrapolate',
                     bounds_error=False)
 
