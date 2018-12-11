@@ -338,7 +338,10 @@ def temperature_delay(temptable, divisor,
 
 def calculate_temperature_correction(met_start, met_stop,
                                      temperature_file=None,
-                                     adjust=False):
+                                     adjust=False, hdf_dump_file='dump.hdf5'):
+    if os.path.exists(hdf_dump_file):
+        return pd.read_hdf(hdf_dump_file, key='tempdata')
+
     mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
     temptable = read_temptable(mjdstart=mjdstart - 5,
                                mjdstop=mjdstop + 5,
@@ -391,6 +394,8 @@ def calculate_temperature_correction(met_start, met_stop,
 
     if adjust:
         data = adjust_temperature_correction(data)
+
+    data.to_hdf(hdf_dump_file, key='tempdata')
     return data
 
 
