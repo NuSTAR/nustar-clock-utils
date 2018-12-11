@@ -5,6 +5,10 @@ Utilities for a precise timing calibration of NuSTAR data
     :target: http://www.astropy.org
     :alt: Powered by Astropy Badge
 
+.. image:: https://travis-ci.com/matteobachetti/nustar-clock-utils.svg?token=rstW8i2PFzp3kAXcymsp&branch=master
+    :target: https://travis-ci.com/matteobachetti/nustar-clock-utils
+    :alt: Travis CI build
+
  Utilities for a precise timing calibration of NuSTAR data
 
 
