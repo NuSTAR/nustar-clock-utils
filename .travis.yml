@@ -28,8 +28,8 @@ env:
         # overridden underneath. They are defined here in order to save having
         # to repeat them for all configurations.
         - PYTHON_VERSION=3.7
-        - NUMPY_VERSION=stable
-        - ASTROPY_VERSION=stable
+#        - NUMPY_VERSION=stable
+#        - ASTROPY_VERSION=stable
         - MAIN_CMD='python setup.py'
         - SETUP_CMD='test'
         - EVENT_TYPE='pull_request push'
