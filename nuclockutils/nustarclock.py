@@ -27,16 +27,25 @@ def _look_for_temptable():
     Examples
     --------
     >>> import os
-    >>> tempt = _look_for_temptable()
+    >>> tempt = _look_for_temptable() # doctest: +ELLIPSIS
+    ...
     >>> tempt.endswith('tp_eps_ceu_txco_tmp.csv')
     True
     """
     name = 'tp_eps_ceu_txco_tmp.csv'
     fullpath = os.path.join(datadir, name)
-    assert os.path.exists(fullpath), \
-        ("Temperature table not found. Have you run get_data.sh in "
-         "the data directory?")
 
+    if not os.path.exists(fullpath):
+        from contextlib import redirect_stdout
+        import shutil
+        from astropy.utils.data import download_file
+        import io
+        url = 'https://www.dropbox.com/s/spkn4v018m5fvkf/tp_eps_ceu_txco_tmp.csv?dl=0'
+
+        f = io.StringIO()
+        with redirect_stdout(f):
+            local_path = download_file(url)
+        shutil.copyfile(local_path, fullpath)
     return fullpath
 
 

@@ -1,3 +1,3 @@
 if test -z `ls tp_eps_ceu_txco_tmp.csv`; then
-    wget -N https://www.dropbox.com/s/25o5r51xumqblrj/tp_eps_ceu_txco_tmp.csv?dl=0 -O tp_eps_ceu_txco_tmp.csv
+    wget -N https://drive.google.com/open?id=1EH3OBRfE3JbKX0iqinRX7reUJQlSR3Vl -O nuclockutils/data/tp_eps_ceu_txco_tmp.csv
 fi
