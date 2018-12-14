@@ -18,9 +18,11 @@ class TestExecution(object):
         self.parfile = os.path.join(datadir, "dummy_par.par")
         self.evfile = os.path.join(datadir, "dummy_evt.evt")
 
+    @pytest.mark.remote_data
     def test_read_orb_funcs(self):
         res = get_orbital_functions(self.orbfile)
 
+    @pytest.mark.remote_data
     def test_barycorr(self):
         outfile = main_barycorr([self.evfile, self.orbfile, self.parfile])
         assert os.path.exists(outfile)
