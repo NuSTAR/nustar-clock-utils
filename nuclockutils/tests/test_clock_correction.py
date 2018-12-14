@@ -3,7 +3,7 @@ import numpy as np
 import os
 import pytest
 from nuclockutils import read_clock_offset_table, read_freq_changes_table
-from nuclockutils import read_temptable, apply_clock_correction
+from nuclockutils import read_temptable, apply_clock_correction, main_tempcorr
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
@@ -38,3 +38,7 @@ class TestExecution(object):
         outfile = apply_clock_correction(self.orbfile, outfile=None)
         assert os.path.exists(outfile)
 
+    def test_command_line(self):
+        outfile = main_tempcorr([self.orbfile, '--no-adjust',
+                                 '--force-divisor', '24000000'])
+        assert os.path.exists(outfile)

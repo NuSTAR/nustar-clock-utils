@@ -341,7 +341,9 @@ def temperature_delay(temptable, divisor,
 
 def calculate_temperature_correction(met_start, met_stop,
                                      temperature_file=None,
-                                     adjust=False, hdf_dump_file='dump.hdf5'):
+                                     freqchange_file=None,
+                                     adjust=False, hdf_dump_file='dump.hdf5',
+                                     force_divisor=None):
     if os.path.exists(hdf_dump_file):
         return pd.read_hdf(hdf_dump_file, key='tempdata')
 
@@ -349,12 +351,17 @@ def calculate_temperature_correction(met_start, met_stop,
     temptable = read_temptable(mjdstart=mjdstart - 5,
                                mjdstop=mjdstop + 5,
                                temperature_file=temperature_file)
-    freq_changes_table = read_freq_changes_table()
-    allfreqtimes = np.array(freq_changes_table['met'])
-    allfreqtimes = np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
+    if not force_divisor:
+        freq_changes_table = \
+            read_freq_changes_table(freqchange_file=freqchange_file)
+        allfreqtimes = np.array(freq_changes_table['met'])
+        allfreqtimes = \
+            np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
+        met_intervals = list(
+            zip(allfreqtimes[:-1], allfreqtimes[1:]))
+    else:
+        met_intervals = [[met_start - 10, met_stop + 10]]
 
-    met_intervals = list(
-        zip(allfreqtimes[:-1], allfreqtimes[1:]))
 
     divisors = freq_changes_table['divisor']
     last_corr = 0
@@ -442,10 +449,12 @@ def adjust_temperature_correction(data):
     return data
 
 
-def temperature_correction_fun(met_start, met_stop):
-    data = calculate_temperature_correction(met_start, met_stop, adjust=True)
+def temperature_correction_fun(met_start, met_stop, adjust=True,
+                               force_divisor=None):
+    data = calculate_temperature_correction(met_start, met_stop, adjust=adjust,
+                                            force_divisor=force_divisor)
 
-    return interp1d(data['met'], data['temp_corr'],
+    return interp1d(np.array(data['met']), np.array(data['temp_corr']),
                     fill_value="extrapolate", bounds_error=False)
 
 
@@ -454,20 +463,27 @@ def create_clockfile(met_start, met_stop):
     pass
 
 
-def apply_clock_correction(events_file, outfile=None):
+def apply_clock_correction(events_file, outfile=None,
+                           adjust=True, force_divisor=None):
+    import shutil
     ext = splitext_improved(os.path.basename(events_file))[1]
     if outfile is None:
         outfile = events_file.replace(ext, "_tc" + ext)
     if outfile == events_file:
         raise ValueError("outfile == events_file")
 
-    with fits.open(events_file, memmap=False) as hdul:
+    shutil.copyfile(events_file, outfile)
+
+    with fits.open(outfile) as hdul:
         event_times = hdul[1].data['TIME']
         start, stop = event_times[0], event_times[-1]
         corr_fun = temperature_correction_fun(start - 2*86400,
-                                              stop + 2*86400)
+                                              stop + 2*86400,
+                                              adjust=adjust,
+                                              force_divisor=force_divisor)
         hdul[1].data['TIME'] = event_times - corr_fun(event_times)
         hdul.writeto(outfile, overwrite=True)
+
     return outfile
 
 
@@ -480,8 +496,14 @@ def main_tempcorr(args=None):
     parser.add_argument("file", help="Uncorrected event file")
     parser.add_argument("-o", "--outfile", default=None,
                         help="Output file name (default <inputfname>_tc.evt)")
-
+    parser.add_argument("--no-adjust",
+                        help="Do not adjust using tabulated clock offsets",
+                        action='store_true', default=False)
+    parser.add_argument("-D", "--force-divisor", default=None, type=float,
+                        help="Force frequency divisor to this value")
     args = parser.parse_args(args)
 
-    apply_clock_correction(args.file, outfile=args.outfile)
+    outfile = apply_clock_correction(args.file, outfile=args.outfile,
+                                     adjust=not args.no_adjust)
+    return outfile
 
