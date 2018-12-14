@@ -65,7 +65,7 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
                   "Also, TSTART, TSTOP etc. might be affected by leap seconds")
     if outfile is None:
         ext = splitext_improved(evfile)[1]
-        outfile = evfile.replace(ext, '_' + ext)
+        outfile = evfile.replace(ext, '_bary' + ext)
 
     if os.path.exists(outfile) and not overwrite:
         raise RuntimeError('Output file exists')
@@ -83,7 +83,7 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
     mjds = modelin.get_barycentric_toas(ts)
     copyfile(evfile, outfile)
 
-    with fits.open(evfile, memmap=False) as hdul:
+    with fits.open(outfile, memmap=True) as hdul:
         mets = (mjds.value - NUSTAR_MJDREF) * 86400
 
         uncorr_mets = hdul[1].data['TIME']
@@ -113,7 +113,7 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
             hdu.header['TREFDIR'] = 'RA_OBJ,DEC_OBJ'
             hdu.header['TREFPOS'] = 'BARYCENTER'
 
-        hdul.writeto(outfile, overwrite=overwrite)
+        hdul.writeto(outfile, overwrite=True)
 
     return outfile
 
@@ -136,6 +136,8 @@ def main_barycorr(args=None):
 
     args = parser.parse_args(args)
 
-    barycorr(args.file, args.orbitfile, args.parfile, outfile=args.outfile,
-             overwrite=args.overwrite)
+    outfile = \
+        barycorr(args.file, args.orbitfile, args.parfile, outfile=args.outfile,
+                 overwrite=args.overwrite)
 
+    return outfile
