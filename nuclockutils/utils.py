@@ -18,12 +18,14 @@ def splitext_improved(path):
     True
     >>> np.all(splitext_improved("a.f/a.tar") ==  ('a.f/a', '.tar'))
     True
+    >>> np.all(splitext_improved("a.a.a.f/a.tar.gz") ==  ('a.a.a.f/a', '.tar.gz'))
+    True
     """
     import os
     dir, file = os.path.split(path)
 
     if len(file.split('.')) > 2:
-        froot, ext = os.path.join(dir, file.split('.')[0]),'.' + '.'.join(file.split('.')[-2:])
+        froot, ext = file.split('.')[0],'.' + '.'.join(file.split('.')[-2:])
     else:
         froot, ext = os.path.splitext(file)
 
