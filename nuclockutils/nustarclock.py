@@ -319,7 +319,6 @@ def temperature_delay(temptable, divisor,
     ppm_mod_old = clock_ppm_model(times_fine, temp_fun(times_fine),
                                   old_version=True)
 
-    # ppm_mod = ppm0 - slope * (temp_fun(times_fine) - t0)
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
     clock_rate_corr_old = (1 + ppm_mod_old / 1000000) * 24000000 / divisor - 1
 

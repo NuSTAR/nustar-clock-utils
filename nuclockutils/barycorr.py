@@ -46,3 +46,96 @@ def get_orbital_functions(orbfile):
     orbfunc.lst_fun = lst_fun
 
     return orbfunc
+
+
+def barycorr(evfile, orbfile, parfile, outfile=None,
+             overwrite=False):
+    from astropy.io import fits
+    from pint.observatory.nustar_obs import NuSTARObs
+    from pint.event_toas import load_fits_TOAs
+    from pint.models import get_model
+    from pint.toa import get_TOAs_list
+    from shutil import copyfile
+    from .utils import splitext_improved, NUSTAR_MJDREF, sec_to_mjd
+    from astropy.time import Time
+    import os
+    import warnings
+
+    warnings.warn("At the moment, GTIs are not barycentered. "
+                  "Also, TSTART, TSTOP etc. might be affected by leap seconds")
+    if outfile is None:
+        ext = splitext_improved(evfile)[1]
+        outfile = evfile.replace(ext, '_' + ext)
+
+    if os.path.exists(outfile) and not overwrite:
+        raise RuntimeError('Output file exists')
+
+    NuSTARObs(name='NuSTAR',FPorbname=orbfile, tt2tdb_mode='pint')
+    tl = load_fits_TOAs(evfile, mission='nustar', timeref='LOCAL')
+
+    # Read in model
+    modelin = get_model(parfile)
+
+    ts = get_TOAs_list(tl, include_bipm=False,
+        include_gps=False, planets=False, tdb_method='default',
+                       ephem='DE421')
+    ts.filename = orbfile
+    mjds = modelin.get_barycentric_toas(ts)
+    copyfile(evfile, outfile)
+
+    with fits.open(evfile, memmap=False) as hdul:
+        mets = (mjds.value - NUSTAR_MJDREF) * 86400
+
+        uncorr_mets = hdul[1].data['TIME']
+        start_corr = mets[0] - uncorr_mets[0]
+        stop_corr = mets[-1] - uncorr_mets[-1]
+
+        start = hdul[1].header['TSTART'] + start_corr
+        start = Time(sec_to_mjd(start), format='mjd')
+
+        stop = hdul[1].header['TSTOP'] + stop_corr
+        stop = Time(sec_to_mjd(stop), format='mjd')
+
+        hdul[1].data['TIME'] = mets
+        version = '0.0dev'
+        for hdu in hdul:
+            hdu.header['CREATOR'] = f'NuSTAR Clock Utils - v. {version}'
+            hdu.header['DATE'] = Time.now().fits
+            hdu.header['DATE-END'] = stop.fits
+            hdu.header['DATE-OBS'] = start.fits
+            hdu.header['PLEPHEM'] = 'JPL-DE421'
+            hdu.header['RADECSYS'] = 'FK5'
+            hdu.header['TIMEREF'] = 'SOLARSYSTEM'
+            hdu.header['TIMESYS'] = 'TDB'
+            hdu.header['TIMEZERO'] = 0.0
+            hdu.header['TSTART'] = (start.mjd - NUSTAR_MJDREF) * 86400
+            hdu.header['TSTOP'] = (stop.mjd - NUSTAR_MJDREF) * 86400
+            hdu.header['TREFDIR'] = 'RA_OBJ,DEC_OBJ'
+            hdu.header['TREFPOS'] = 'BARYCENTER'
+
+        hdul.writeto(outfile, overwrite=overwrite)
+
+    return outfile
+
+
+def main_barycorr(args=None):
+    import argparse
+    description = ('Apply the barycenter correction to NuSTAR'
+                   'event files')
+    parser = argparse.ArgumentParser(description=description)
+
+    parser.add_argument("file", help="Uncorrected event file")
+    parser.add_argument("orbitfile", help="Orbit file")
+    parser.add_argument("parfile", help="Parameter file in TEMPO/TEMPO2 "
+                                        "format (for precise coordinates)")
+    parser.add_argument("-o", "--outfile", default=None,
+                        help="Output file name (default <inputfname>_tc.evt)")
+    parser.add_argument("--overwrite",
+                        help="Overwrite existing data",
+                        action='store_true', default=False)
+
+    args = parser.parse_args(args)
+
+    barycorr(args.file, args.orbitfile, args.parfile, outfile=args.outfile,
+             overwrite=args.overwrite)
+
