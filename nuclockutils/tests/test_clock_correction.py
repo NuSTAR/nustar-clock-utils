@@ -27,11 +27,13 @@ class TestExecution(object):
         table = read_freq_changes_table(filter_bad=False)
         assert len(tablefilt) < len(table)
 
+    @pytest.mark.remote_data
     def test_read_temptables(self):
         table = read_temptable(mjdstart=self.t0, mjdstop=self.t1)
         table = read_temptable(temperature_file=self.tempfile,
                                mjdstart=self.t0, mjdstop=self.t1)
 
+    @pytest.mark.remote_data
     def test_fun_from_file(self):
         outfile = apply_clock_correction(self.orbfile, outfile=None)
         assert os.path.exists(outfile)
