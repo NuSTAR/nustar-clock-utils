@@ -5,7 +5,7 @@ include ah_bootstrap.py
 include setup.cfg
 include nuclockutils/tests/coveragerc
 
-recursive-include nuclockutils *.pyx *.c *.pxd *.fits *.csv
+recursive-include nuclockutils *.pyx *.c *.pxd *.fits *.csv *.evt
 recursive-include docs *
 recursive-include licenses *
 recursive-include cextern *
