@@ -230,14 +230,33 @@ def read_saved_temptable(mjdstart=None, mjdstop=None,
     return table[good]
 
 
+def read_fits_temptable(temperature_file):
+    with fits.open(temperature_file) as hdul:
+        temptable = Table.read(hdul['ENG_0x133'])
+        temptable.rename_column('TIME', 'met')
+        temptable.rename_column('sc_clock_ext_tmp', 'temperature')
+        temptable['temperature_smooth'] = \
+            savgol_filter(temptable['temperature'], 11, 3)
+        for col in temptable.colnames:
+            if 'chu' in col:
+                temptable.remove_column(col)
+    return temptable
+
 
 def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None):
-    if temperature_file is None or temperature_file.endswith('.csv'):
-        return read_csv_temptable(mjdstart, mjdstop,
-                                  temperature_file)
+    if temperature_file is None:
+        ext = None
     else:
+        ext = splitext_improved(temperature_file)[1]
+    if ext in [None, '.csv']:
+        return read_csv_temptable(mjdstart, mjdstop, temperature_file)
+    elif ext in ['.hk', '.hk.gz']:
+        return read_fits_temptable(temperature_file)
+    elif ext in ['.hdf5', '.h5']:
         return read_saved_temptable(mjdstart, mjdstop,
                                     temperature_file)
+    else:
+        raise ValueError('Unknown format for temperature file')
 
 
 def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
@@ -450,9 +469,10 @@ def adjust_temperature_correction(data):
 
 
 def temperature_correction_fun(met_start, met_stop, adjust=True,
-                               force_divisor=None):
+                               force_divisor=None, temperature_file=None):
     data = calculate_temperature_correction(met_start, met_stop, adjust=adjust,
-                                            force_divisor=force_divisor)
+                                            force_divisor=force_divisor,
+                                            temperature_file=temperature_file)
 
     return interp1d(np.array(data['met']), np.array(data['temp_corr']),
                     fill_value="extrapolate", bounds_error=False)
@@ -464,7 +484,8 @@ def create_clockfile(met_start, met_stop):
 
 
 def apply_clock_correction(events_file, outfile=None,
-                           adjust=True, force_divisor=None):
+                           adjust=True, force_divisor=None,
+                           temperature_file=None):
     import shutil
     ext = splitext_improved(os.path.basename(events_file))[1]
     if outfile is None:
@@ -477,10 +498,12 @@ def apply_clock_correction(events_file, outfile=None,
     with fits.open(outfile) as hdul:
         event_times = hdul[1].data['TIME']
         start, stop = event_times[0], event_times[-1]
-        corr_fun = temperature_correction_fun(start - 2*86400,
-                                              stop + 2*86400,
-                                              adjust=adjust,
-                                              force_divisor=force_divisor)
+        corr_fun = \
+            temperature_correction_fun(start - 2*86400,
+                                       stop + 2*86400,
+                                       adjust=adjust,
+                                       force_divisor=force_divisor,
+                                       temperature_file=temperature_file)
         hdul[1].data['TIME'] = event_times - corr_fun(event_times)
         hdul.writeto(outfile, overwrite=True)
 
@@ -496,6 +519,8 @@ def main_tempcorr(args=None):
     parser.add_argument("file", help="Uncorrected event file")
     parser.add_argument("-o", "--outfile", default=None,
                         help="Output file name (default <inputfname>_tc.evt)")
+    parser.add_argument("-t", "--tempfile", default=None,
+                        help="Temperature file")
     parser.add_argument("--no-adjust",
                         help="Do not adjust using tabulated clock offsets",
                         action='store_true', default=False)
@@ -504,6 +529,7 @@ def main_tempcorr(args=None):
     args = parser.parse_args(args)
 
     outfile = apply_clock_correction(args.file, outfile=args.outfile,
-                                     adjust=not args.no_adjust)
+                                     adjust=not args.no_adjust,
+                                     temperature_file=args.tempfile)
     return outfile
 
