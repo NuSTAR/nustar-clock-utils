@@ -364,13 +364,14 @@ def calculate_temperature_correction(met_start, met_stop,
                                      adjust=False, hdf_dump_file='dump.hdf5',
                                      force_divisor=None):
     if os.path.exists(hdf_dump_file):
+        print(f"Reading cached data from file {hdf_dump_file}")
         return pd.read_hdf(hdf_dump_file, key='tempdata')
 
     mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
     temptable = read_temptable(mjdstart=mjdstart - 5,
                                mjdstop=mjdstop + 5,
                                temperature_file=temperature_file)
-    if not force_divisor:
+    if force_divisor is None:
         freq_changes_table = \
             read_freq_changes_table(freqchange_file=freqchange_file)
         allfreqtimes = np.array(freq_changes_table['met'])
@@ -378,11 +379,11 @@ def calculate_temperature_correction(met_start, met_stop,
             np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
         met_intervals = list(
             zip(allfreqtimes[:-1], allfreqtimes[1:]))
+        divisors = freq_changes_table['divisor']
     else:
         met_intervals = [[met_start - 10, met_stop + 10]]
+        divisors = [force_divisor]
 
-
-    divisors = freq_changes_table['divisor']
     last_corr = 0
     last_time = met_intervals[0][0]
 
@@ -473,7 +474,6 @@ def temperature_correction_fun(met_start, met_stop, adjust=True,
     data = calculate_temperature_correction(met_start, met_stop, adjust=adjust,
                                             force_divisor=force_divisor,
                                             temperature_file=temperature_file)
-
     return interp1d(np.array(data['met']), np.array(data['temp_corr']),
                     fill_value="extrapolate", bounds_error=False)
 
@@ -530,6 +530,7 @@ def main_tempcorr(args=None):
 
     outfile = apply_clock_correction(args.file, outfile=args.outfile,
                                      adjust=not args.no_adjust,
+                                     force_divisor=args.force_divisor,
                                      temperature_file=args.tempfile)
     return outfile
 
