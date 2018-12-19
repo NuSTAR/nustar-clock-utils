@@ -12,6 +12,7 @@ from scipy.signal import savgol_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
 from astropy.io import fits
 import tqdm
+from astropy import log
 
 
 curdir = os.path.abspath(os.path.dirname(__file__))
@@ -107,6 +108,7 @@ def read_clock_offset_table(clockoffset_file=None):
     clock_offset_table.remove_row(len(clock_offset_table) - 1)
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
+    log.info("Flagging bad points...")
     for b in ALL_BAD_POINTS:
         nearest = np.argmin(np.abs(clock_offset_table['met'] - b))
         if np.abs(clock_offset_table['met'][nearest] - b) < 1:
@@ -194,11 +196,11 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
         temperature_file = _look_for_temptable()
 
     if mjdstart is not None or mjdstop is not None:
-        print("Filtering table...")
+        log.info("Filtering table...")
         tmpfile = _filter_table(temperature_file,
                                 start_date=mjdstart - 10,
                                 end_date=mjdstop + 10, tmpfile='tmp.csv')
-        print("Done")
+        log.info("Done")
     else:
         tmpfile = temperature_file
 
@@ -364,7 +366,7 @@ def calculate_temperature_correction(met_start, met_stop,
                                      adjust=False, hdf_dump_file='dump.hdf5',
                                      force_divisor=None):
     if os.path.exists(hdf_dump_file):
-        print(f"Reading cached data from file {hdf_dump_file}")
+        log.info(f"Reading cached data from file {hdf_dump_file}")
         return pd.read_hdf(hdf_dump_file, key='tempdata')
 
     mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
@@ -397,13 +399,15 @@ def calculate_temperature_correction(met_start, met_stop,
             break
 
         start, stop = met_intv
+        log.info(f"Calculating temperature correction between "
+                 f"MET {start:d}--{stop:d}")
         good_temps = (temptable['met'] >= start - 20) & (
                       temptable['met'] <= stop + 20)
 
         temptable_filt = temptable[good_temps]
 
         if len(temptable_filt) < 10:
-            print(
+            log.warning(
                 f"Too few temperature points in interval "
                 f"{start} to {stop} (MET)")
             continue
@@ -416,16 +420,20 @@ def calculate_temperature_correction(met_start, met_stop,
         temp_corr = \
             delay_function(times_fine) + last_corr - delay_function(last_time)
 
-        new_table = pd.DataFrame(dict(met=times_fine,
-                                      temp_corr=temp_corr))
+        new_data = dict(met=times_fine,
+                        temp_corr=temp_corr,
+                        divisor=np.zeros_like(times_fine) + divisors[i])
+        new_table = pd.DataFrame(new_data)
         data = data.append(new_table, ignore_index=True)
         last_corr = temp_corr[-1]
         last_time = times_fine[-1]
 
     if adjust:
+        log.info("Adjusting temperature correction")
         data = adjust_temperature_correction(data)
 
     data.to_hdf(hdf_dump_file, key='tempdata')
+    log.info(f"Intermediate data saved to {hdf_dump_file}")
     return data
 
 
@@ -442,7 +450,11 @@ def adjust_temperature_correction(data):
                     clock_offset_table['met'] <= stop)
     clock_offset_table = clock_offset_table[good_times]
     no_flag = ~clock_offset_table['flag']
+    N = len(clock_offset_table)
     clock_offset_table = clock_offset_table[no_flag]
+    n = len(clock_offset_table)
+    log.info(f"Found {n}/{N} valid clock offset measurements "
+             f"between MET {int(start)}--{int(stop)}")
 
     cltimes = clock_offset_table['met']
     offsets = clock_offset_table['offset']
@@ -464,6 +476,8 @@ def adjust_temperature_correction(data):
                            clock_offset_table['offset'])
 
     m, q = popt
+
+    log.info(f"Correcting for a drift of {m} s/s")
 
     data['temp_corr'] = data['temp_corr'] - (m * (times - cltimes[0]) + q)
     return data
@@ -493,11 +507,14 @@ def apply_clock_correction(events_file, outfile=None,
     if outfile == events_file:
         raise ValueError("outfile == events_file")
 
+    log.info(f"Opening {events_file}")
+
     shutil.copyfile(events_file, outfile)
 
     with fits.open(outfile) as hdul:
         event_times = hdul[1].data['TIME']
         start, stop = event_times[0], event_times[-1]
+        log.info(f"Calculating temperature correction")
         corr_fun = \
             temperature_correction_fun(start - 2*86400,
                                        stop + 2*86400,
