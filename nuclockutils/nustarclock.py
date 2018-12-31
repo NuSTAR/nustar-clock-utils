@@ -131,14 +131,16 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     """
     if freqchange_file is None:
         freqchange_file = _look_for_freq_change_file()
+    log.info(f"Reading {freqchange_file}")
     freq_changes_table = Table.read(freqchange_file,
                                 format='csv', delimiter=' ',
                                 names=['uxt', 'met', 'divisor'])
     freq_changes_table['mjd'] = sec_to_mjd(freq_changes_table['met'])
     freq_changes_table.remove_row(len(freq_changes_table) - 1)
+    freq_changes_table['flag'] = \
+        np.abs(freq_changes_table['divisor'] - 2.400034e7) > 20
     if filter_bad:
-        freq_changes_table = \
-            freq_changes_table[np.abs(freq_changes_table['divisor'] - 2.400034e7) < 20]
+        freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
     return freq_changes_table
 
 
@@ -212,8 +214,6 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
     temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * 86400
     temptable.remove_column('Time')
     temptable.rename_column('tp_eps_ceu_txco_tmp', 'temperature')
-    temptable['temperature_smooth'] = \
-        savgol_filter(temptable['temperature'], 11, 3)
     return temptable
 
 
@@ -222,6 +222,9 @@ def read_saved_temptable(mjdstart=None, mjdstop=None,
     table = Table.read(temperature_file)
     if mjdstart is None and mjdstop is None:
         return table
+
+    if 'mjd' not in table.colnames:
+        table["mjd"] = sec_to_mjd(table['met'])
 
     if mjdstart is None:
         mjdstart = table['mjd'][0]
@@ -237,28 +240,44 @@ def read_fits_temptable(temperature_file):
         temptable = Table.read(hdul['ENG_0x133'])
         temptable.rename_column('TIME', 'met')
         temptable.rename_column('sc_clock_ext_tmp', 'temperature')
-        temptable['temperature_smooth'] = \
-            savgol_filter(temptable['temperature'], 11, 3)
         for col in temptable.colnames:
             if 'chu' in col:
                 temptable.remove_column(col)
+        temptable["mjd"] = sec_to_mjd(temptable['met'])
     return temptable
 
 
-def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None):
+def interpolate_temptable(temptable, dt=10):
+    time = temptable['met']
+    temperature = temptable['temperature']
+    new_times = np.arange(time[0], time[-1], dt)
+    idxs = np.searchsorted(time, new_times)
+    return Table({'met': new_times, 'temperature': temperature[idxs]})
+
+
+def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
+                   dt=None):
     if temperature_file is None:
         ext = None
     else:
         ext = splitext_improved(temperature_file)[1]
     if ext in [None, '.csv']:
-        return read_csv_temptable(mjdstart, mjdstop, temperature_file)
+        temptable = read_csv_temptable(mjdstart, mjdstop, temperature_file)
     elif ext in ['.hk', '.hk.gz']:
-        return read_fits_temptable(temperature_file)
+        temptable = read_fits_temptable(temperature_file)
     elif ext in ['.hdf5', '.h5']:
         return read_saved_temptable(mjdstart, mjdstop,
                                     temperature_file)
     else:
         raise ValueError('Unknown format for temperature file')
+
+    if dt is not None:
+        temptable = interpolate_temptable(temptable, dt)
+
+    temptable['temperature_smooth'] = \
+        savgol_filter(temptable['temperature'], 11, 3)
+
+    return temptable
 
 
 def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
@@ -328,7 +347,11 @@ def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
 def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
                       debug=False):
+    good = np.diff(temptable['met']) > 0
+    good = np.concatenate((good, [True]))
+    temptable = temptable[good]
     table_times = temptable['met']
+
     if met_start is None:
         met_start = table_times[0]
     if met_stop is None:
@@ -336,26 +359,17 @@ def temperature_delay(temptable, divisor,
     temperature = temptable['temperature_smooth']
 
     temp_fun = interp1d(table_times, temperature,
-                        fill_value='extrapolate', bounds_error=False)
+                        fill_value='extrapolate', bounds_error=False,
+                        assume_sorted=True)
 
     times_fine = np.arange(met_start, met_stop, 0.2)
 
     ppm_mod = clock_ppm_model(times_fine, temp_fun(times_fine))
-    ppm_mod_old = clock_ppm_model(times_fine, temp_fun(times_fine),
-                                  old_version=True)
 
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
-    clock_rate_corr_old = (1 + ppm_mod_old / 1000000) * 24000000 / divisor - 1
 
     delay = np.cumsum(np.diff(times_fine) * clock_rate_corr[:-1])
-    delay_old = np.cumsum(np.diff(times_fine) * clock_rate_corr_old[:-1])
 
-    if debug:
-        import matplotlib.pyplot as plt
-        plt.plot(times_fine[1:], delay, label="New")
-        plt.plot(times_fine[1:], delay_old, label="Old")
-        plt.legend()
-        plt.savefig(f"{met_start}-{met_stop}_delaycomparison.png")
     return interp1d(times_fine[:-1], delay, fill_value='extrapolate',
                     bounds_error=False)
 
@@ -433,6 +447,104 @@ def calculate_temperature_correction(met_start, met_stop,
         data = adjust_temperature_correction(data)
 
     data.to_hdf(hdf_dump_file, key='tempdata')
+    log.info(f"Intermediate data saved to {hdf_dump_file}")
+    return data
+
+
+def calculate_temperature_correction_table(met_start, met_stop,
+                                     temperature_file=None,
+                                     freqchange_file=None,
+                                     adjust=False, hdf_dump_file='dump.hdf5',
+                                     force_divisor=None, time_resolution=0.5):
+    if hdf_dump_file is not None and os.path.exists(hdf_dump_file):
+        log.info(f"Reading cached data from file {hdf_dump_file}")
+        return pd.read_hdf(hdf_dump_file, key='tempdata')
+
+    mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
+    temptable = read_temptable(mjdstart=mjdstart - 5,
+                               mjdstop=mjdstop + 5,
+                               temperature_file=temperature_file)
+    if force_divisor is None:
+        freq_changes_table = \
+            read_freq_changes_table(freqchange_file=freqchange_file)
+        allfreqtimes = np.array(freq_changes_table['met'])
+        allfreqtimes = \
+            np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
+        met_intervals = list(
+            zip(allfreqtimes[:-1], allfreqtimes[1:]))
+        divisors = freq_changes_table['divisor']
+    else:
+        met_intervals = [[met_start - 10, met_stop + 10]]
+        divisors = [force_divisor]
+
+    last_corr = 0
+    last_time = met_intervals[0][0]
+    N = int((met_stop - met_start) / time_resolution + 50000000)
+
+    log.info(f"Allocating temperature table with {N} entries...")
+    table = Table(names=['met', 'temp_corr', 'divisor'],
+                  data=np.zeros((N, 3))
+                  )
+    log.info("Done")
+
+    firstidx = 0
+    for i, met_intv in tqdm.tqdm(enumerate(met_intervals),
+                                 total=len(met_intervals)):
+        if met_intv[1] < met_start:
+            continue
+        if met_intv[0] > met_stop:
+            break
+
+        start, stop = met_intv
+        log.debug(f"Calculating temperature correction between "
+                 f"MET {start:d}--{stop:d}")
+
+        tempidx = np.searchsorted(temptable['met'], [start - 20, stop + 20])
+
+        temptable_filt = temptable[tempidx[0]:tempidx[1] + 1]
+
+        if len(temptable_filt) < 10:
+            log.warning(
+                f"Too few temperature points in interval "
+                f"{start} to {stop} (MET)")
+            continue
+
+        delay_function = \
+            temperature_delay(temptable_filt, divisors[i])
+
+        times_fine = np.arange(start, stop, time_resolution)
+
+        temp_corr = \
+            delay_function(times_fine) + last_corr - delay_function(last_time)
+
+        new_data = Table(dict(met=times_fine,
+                        temp_corr=temp_corr,
+                        divisor=np.zeros_like(times_fine) + divisors[i]))
+
+        if np.any(temp_corr != temp_corr):
+            log.error("Invalid data in temperature table")
+            break
+
+        N = len(times_fine)
+        table[firstidx:firstidx + N] = new_data
+        firstidx = firstidx + N
+
+        # new_table = pd.DataFrame(new_data)
+        # data = data.append(new_table, ignore_index=True)
+        last_corr = temp_corr[-1]
+        last_time = times_fine[-1]
+
+    log.info("Interpolation done.")
+    table = table[:firstidx]
+
+    data = table.to_pandas()
+
+    if adjust:
+        log.info("Adjusting temperature correction")
+        data = adjust_temperature_correction(data)
+
+    if hdf_dump_file is not None:
+        data.to_hdf(hdf_dump_file, key='tempdata')
     log.info(f"Intermediate data saved to {hdf_dump_file}")
     return data
 
