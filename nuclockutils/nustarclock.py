@@ -1,5 +1,3 @@
-from pint.observatory.nustar_obs import NuSTARObs
-from pint.scripts.photonphase import main as photonphase
 import glob
 import os
 import shutil
@@ -378,7 +376,7 @@ class ClockCorrection():
         self.adjust_absolute_timing = adjust_absolute_timing
 
         self.hdf_dump_file = hdf_dump_file
-        self.plot_file = label + ".png"
+        self.plot_file = label + "_clock_adjustment.png"
         self.clock_offset_table = clock_offset_table
         self.correct_met = \
             self.temperature_correction_fun(adjust=self.adjust_absolute_timing)
@@ -468,7 +466,8 @@ class ClockCorrection():
             ax0.plot(fine_times, fun(fine_times) * 1000, alpha=0.5)
             new_tcorr = fit_function(fine_times, m, q)
             ax0.plot(fine_times, new_tcorr * 1000)
-            ax0.set_ylabel("Offset (ms))")
+            ax0.set_ylabel("Offset (ms)")
+            ax0.grid()
 
             ax1.scatter(clock_offset_table_all['met'],
                         1e6 * (clock_offset_table_all['offset'] - fit_function(
@@ -486,6 +485,7 @@ class ClockCorrection():
             ax1.set_xlabel("MET (s)")
             ax1.set_ylabel("Residual (us)")
             ax1.set_ylim((-500, 500))
+            ax1.grid()
 
             plt.savefig(self.plot_file)
             plt.close(fig)
@@ -616,7 +616,7 @@ def robust_linear_fit(x, y):
     return ransac
 
 
-class NuSTARobs():
+class NuSTARCorr():
     def __init__(self, events_file, outfile=None,
                  adjust=True, force_divisor=None,
                  temperature_file=None, hdf_dump_file=None):
@@ -635,7 +635,8 @@ class NuSTARobs():
         self.correction_start = None
         self.correction_stop = None
         self.read_observation_info()
-        mjdstart, mjdstop = sec_to_mjd([self.tstart, self.tstop])
+        mjdstart, mjdstop = \
+            sec_to_mjd([self.tstart, self.tstop])
         self.clock_correction = ClockCorrection(temperature_file,
                                                 mjdstart=mjdstart,
                                                 mjdstop=mjdstop,
@@ -652,9 +653,6 @@ class NuSTARobs():
         with fits.open(self.events_file) as hdul:
             hdr = hdul[1].header
             self.tstart, self.tstop = hdr['TSTART'], hdr['TSTOP']
-            self.correction_start = self.tstart - 2 * 86400
-            self.correction_stop = self.tstop + 2 * 86400
-
 
     def apply_clock_correction(self):
         events_file = self.events_file
@@ -696,15 +694,15 @@ def main_tempcorr(args=None):
                         help="Do not adjust using tabulated clock offsets",
                         action='store_true', default=False)
     parser.add_argument("-D", "--force-divisor", default=None, type=float,
-                        help="Force frequency divisor to this value. Typical"
+                        help="Force frequency divisor to this value. Typical "
                              "values are around 24000330")
     args = parser.parse_args(args)
 
-    observation = NuSTARobs(args.file, outfile=args.outfile,
-                            adjust=not args.no_adjust,
-                            force_divisor=args.force_divisor,
-                            temperature_file=args.tempfile,
-                            hdf_dump_file=args.cache)
+    observation = NuSTARCorr(args.file, outfile=args.outfile,
+                             adjust=not args.no_adjust,
+                             force_divisor=args.force_divisor,
+                             temperature_file=args.tempfile,
+                             hdf_dump_file=args.cache)
     outfile = observation.apply_clock_correction()
     return outfile
 
