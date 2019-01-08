@@ -2,6 +2,8 @@ from pint.observatory.nustar_obs import NuSTARObs
 from pint.scripts.photonphase import main as photonphase
 import glob
 import os
+import shutil
+
 import numpy as np
 from astropy.table import Table
 import pandas as pd
@@ -100,6 +102,7 @@ def read_clock_offset_table(clockoffset_file=None):
     """
     if clockoffset_file is None:
         clockoffset_file = _look_for_clock_offset_file()
+    log.info(f"Reading clock offsets from {clockoffset_file}")
     clock_offset_table = Table.read(clockoffset_file,
                                     format='csv', delimiter=' ',
                                     names=['uxt', 'met', 'offset', 'divisor',
@@ -131,7 +134,7 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     """
     if freqchange_file is None:
         freqchange_file = _look_for_freq_change_file()
-    log.info(f"Reading {freqchange_file}")
+    log.info(f"Reading frequency changes from {freqchange_file}")
     freq_changes_table = Table.read(freqchange_file,
                                 format='csv', delimiter=' ',
                                 names=['uxt', 'met', 'divisor'])
@@ -187,6 +190,9 @@ def _filter_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
             if l.startswith(stop_str):
                 break
 
+    if new_str == "":
+        raise ValueError(f"No temperature information is available for the "
+                         "wanted time range in {temperature_file}")
     with open(tmpfile, "w") as fobj:
         print(new_str, file=fobj)
 
@@ -194,9 +200,6 @@ def _filter_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
 
 
 def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
-    if temperature_file is None:
-        temperature_file = _look_for_temptable()
-
     if mjdstart is not None or mjdstop is not None:
         log.info("Filtering table...")
         tmpfile = _filter_table(temperature_file,
@@ -232,6 +235,9 @@ def read_saved_temptable(mjdstart=None, mjdstop=None,
         mjdstop = table['mjd'][-1]
 
     good = (table['mjd'] >= mjdstart - 10)&(table['mjd'] <= mjdstop + 10)
+    if not np.any(good):
+        raise ValueError(f"No temperature information is available for the "
+                         "wanted time range in {temperature_file}")
     return table[good]
 
 
@@ -258,10 +264,10 @@ def interpolate_temptable(temptable, dt=10):
 def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
                    dt=None):
     if temperature_file is None:
-        ext = None
-    else:
-        ext = splitext_improved(temperature_file)[1]
-    if ext in [None, '.csv']:
+        temperature_file = _look_for_temptable()
+    log.info(f"Reading temperature_information from {temperature_file}")
+    ext = splitext_improved(temperature_file)[1]
+    if ext in ['.csv']:
         temptable = read_csv_temptable(mjdstart, mjdstop, temperature_file)
     elif ext in ['.hk', '.hk.gz']:
         temptable = read_fits_temptable(temperature_file)
@@ -273,6 +279,10 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
 
     if dt is not None:
         temptable = interpolate_temptable(temptable, dt)
+    else:
+        good = np.diff(temptable['met']) > 0
+        good = np.concatenate((good, [True]))
+        temptable = temptable[good]
 
     temptable['temperature_smooth'] = \
         savgol_filter(temptable['temperature'], 11, 3)
@@ -280,23 +290,14 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     return temptable
 
 
-def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
-                    ppm_vs_time_pars=None, old_version=False):
+def abs_des_fun(x, b0, b1, b2, b3, t0=77509250):
+    """An absorption-desorption function"""
+    x = (x - t0) / 86400. / 365.25
+    return b0 * np.log(b1 * x + 1) + b2 * np.log(b3 * x + 1)
+
+
+def clock_ppm_model(nustar_met, temperature):
     """Improved clock model
-
-    Original IDL function by Craig Markwardt:
-
-    temperature0 = 13.5 ;; [degC]
-    x = temperature at epoch ;; [degC]
-    year = epoch time expressed in calendar years (2016.0 = Jan 1.0, 2016)
-    p = [1.3930859254716697D+01,-7.3929902867262087D-02,1.4498257975709195D-03,-3.7891186658656098D-03,2.5104748381788913D-02,  1.9180710395375647D-01]
-    function clock_ppm_model, x, p, year=year, temperature0=temp0
-      temp = (x-temp0)
-      ftemp = P[0] + P[1]*temp + P[2]*temp^2 ;; Temperature dependence
-      t = (year-2012.5d)
-      flongterm = P[3]*t - P[4]*exp(-t/P[5])
-      return, ftemp + flongterm
-    end
 
     Parameters
     ----------
@@ -312,34 +313,17 @@ def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
         parameters of the ppm-time relation (long-term clock decay)
 
     """
-    if ppm_vs_T_pars is None:
-        ppm_vs_T_pars = \
-            [1.3930859254716697e+1, -7.3929902867262087e-2,
-             1.4498257975709195e-3]
-        if old_version:
-            ppm_vs_T_pars = [13.965, -0.0733, 0]
-            T0 = 13
-
-    if ppm_vs_time_pars is None:
-        ppm_vs_time_pars = \
-            [-3.7891186658656098e-3,
-             2.5104748381788913e-2, 1.9180710395375647e-1]
-        # I want time in days
-        ppm_vs_time_pars[0] /= 365.25
-        ppm_vs_time_pars[2] *= 365.25
-        if old_version:
-            ppm_vs_time_pars = [0, 0, 1]
+    T0 = 13.5
+    offset = 13.9158325193 - 0.027918
+    ppm_vs_T_pars = [-0.073795, 0.0015002]
+    ppm_vs_time_pars = [0.008276, 256., -220.043,
+                        3.408586903702425e-05]
 
     temp = (temperature - T0)
-    ftemp = ppm_vs_T_pars[0] + ppm_vs_T_pars[1] * temp + \
-                ppm_vs_T_pars[2]*temp**2 # Temperature dependence
+    ftemp = offset + ppm_vs_T_pars[0] * temp + \
+            ppm_vs_T_pars[1] * temp ** 2  # Temperature dependence
 
-    mjd = sec_to_mjd(time)
-    # year 2012.5 = MJD 56109.999994212965
-    t = (mjd - 56109.999994212965)
-
-    flongterm = \
-        ppm_vs_time_pars[0]*t - ppm_vs_time_pars[1] * np.exp(-t / ppm_vs_time_pars[2])
+    flongterm = abs_des_fun(nustar_met, *ppm_vs_time_pars)
 
     return ftemp + flongterm
 
@@ -347,15 +331,14 @@ def clock_ppm_model(time, temperature, T0=13.5, ppm_vs_T_pars=None,
 def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
                       debug=False):
-    good = np.diff(temptable['met']) > 0
-    good = np.concatenate((good, [True]))
-    temptable = temptable[good]
+    # temptable = self.temptable
     table_times = temptable['met']
 
     if met_start is None:
         met_start = table_times[0]
     if met_stop is None:
         met_stop = table_times[-1]
+
     temperature = temptable['temperature_smooth']
 
     temp_fun = interp1d(table_times, temperature,
@@ -374,96 +357,169 @@ def temperature_delay(temptable, divisor,
                     bounds_error=False)
 
 
-def calculate_temperature_correction(met_start, met_stop,
-                                     temperature_file=None,
-                                     freqchange_file=None,
-                                     adjust=False, hdf_dump_file='dump.hdf5',
-                                     force_divisor=None):
-    if os.path.exists(hdf_dump_file):
-        log.info(f"Reading cached data from file {hdf_dump_file}")
-        return pd.read_hdf(hdf_dump_file, key='tempdata')
+class ClockCorrection():
+    def __init__(self, temperature_file, mjdstart=None, mjdstop=None,
+                 temperature_dt=10, adjust_absolute_timing=False,
+                 force_divisor=None, label="", additional_days=2,
+                 clock_offset_table=None,
+                 hdf_dump_file='dumped_data.hdf5'):
+        self.temperature_file = temperature_file
+        self.mjdstart = mjdstart - additional_days / 2
+        self.mjdstop = mjdstop + additional_days / 2
 
-    mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
-    temptable = read_temptable(mjdstart=mjdstart - 5,
-                               mjdstop=mjdstop + 5,
-                               temperature_file=temperature_file)
-    if force_divisor is None:
-        freq_changes_table = \
-            read_freq_changes_table(freqchange_file=freqchange_file)
-        allfreqtimes = np.array(freq_changes_table['met'])
-        allfreqtimes = \
-            np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
-        met_intervals = list(
-            zip(allfreqtimes[:-1], allfreqtimes[1:]))
-        divisors = freq_changes_table['divisor']
-    else:
-        met_intervals = [[met_start - 10, met_stop + 10]]
-        divisors = [force_divisor]
+        if mjdstart is not None:
+            self.met_start = (mjdstart - NUSTAR_MJDREF) * 86400
+            self.met_stop = (mjdstop - NUSTAR_MJDREF) * 86400
+        self.temperature_dt = temperature_dt
+        self.temptable = None
 
-    last_corr = 0
-    last_time = met_intervals[0][0]
+        self.read_temptable()
+        self.force_divisor = force_divisor
+        self.adjust_absolute_timing = adjust_absolute_timing
 
-    data = pd.DataFrame()
+        self.hdf_dump_file = hdf_dump_file
+        self.plot_file = label + ".png"
+        self.clock_offset_table = clock_offset_table
+        self.correct_met = \
+            self.temperature_correction_fun(adjust=self.adjust_absolute_timing)
+        if label is None:
+            label = f"{self.met_start}-{self.met_stop}"
 
-    for i, met_intv in tqdm.tqdm(enumerate(met_intervals),
-                                 total=len(met_intervals)):
-        if met_intv[1] < met_start:
-            continue
-        if met_intv[0] > met_stop:
-            break
+    def read_temptable(self):
+        self.temptable = read_temptable(temperature_file=self.temperature_file,
+                                        mjdstart=self.mjdstart,
+                                        mjdstop=self.mjdstop,
+                                        dt=self.temperature_dt)
 
-        start, stop = met_intv
-        log.info(f"Calculating temperature correction between "
-                 f"MET {start:d}--{stop:d}")
-        good_temps = (temptable['met'] >= start - 20) & (
-                      temptable['met'] <= stop + 20)
+    def temperature_correction_fun(self, adjust=False):
+        data = \
+            temperature_correction_table(
+                self.met_start, self.met_stop,
+                force_divisor=self.force_divisor,
+                temptable = self.temptable,
+                hdf_dump_file=self.hdf_dump_file)
+        if adjust:
+            log.info("Adjusting temperature correction")
+            data = self.adjust_temperature_correction(data)
+        return interp1d(np.array(data['met']), np.array(data['temp_corr']),
+                        fill_value="extrapolate", bounds_error=False)
 
-        temptable_filt = temptable[good_temps]
+    def adjust_temperature_correction(self, data):
+        import matplotlib.pyplot as plt
+        times = np.array(data['met'])
+        start = times[0]
+        stop = times[-1]
 
-        if len(temptable_filt) < 10:
-            log.warning(
-                f"Too few temperature points in interval "
-                f"{start} to {stop} (MET)")
-            continue
+        clock_offset_table_all = \
+            read_clock_offset_table(self.clock_offset_table)
+        # Find relevant clock offsets
+        good_times = \
+            (clock_offset_table_all['met'] >= start) & (
+                    clock_offset_table_all['met'] <= stop)
+        clock_offset_table_all = clock_offset_table_all[good_times]
 
-        delay_function = \
-            temperature_delay(temptable_filt, divisors[i])
+        no_flag = ~clock_offset_table_all['flag']
+        good_station = clock_offset_table_all['station'] == 'MLD'
+        N = len(clock_offset_table_all)
+        clock_offset_table = clock_offset_table_all[no_flag & good_station]
+        n = len(clock_offset_table)
+        log.info(f"Found {n}/{N} valid clock offset measurements "
+                 f"between MET {int(start)}--{int(stop)}")
 
-        times_fine = np.arange(start, stop, 0.5)
+        cltimes = clock_offset_table['met']
+        offsets = clock_offset_table['offset']
 
-        temp_corr = \
-            delay_function(times_fine) + last_corr - delay_function(last_time)
+        first_clock_idx = np.argmin(np.abs(times - cltimes[0]))
 
-        new_data = dict(met=times_fine,
-                        temp_corr=temp_corr,
-                        divisor=np.zeros_like(times_fine) + divisors[i])
-        new_table = pd.DataFrame(new_data)
-        data = data.append(new_table, ignore_index=True)
-        last_corr = temp_corr[-1]
-        last_time = times_fine[-1]
+        data['temp_corr_rough'] = np.array(data['temp_corr'])
 
-    if adjust:
-        log.info("Adjusting temperature correction")
-        data = adjust_temperature_correction(data)
+        data['temp_corr'] = \
+            data['temp_corr_rough'] - data['temp_corr_rough'][first_clock_idx] + \
+            offsets[0]
 
-    data.to_hdf(hdf_dump_file, key='tempdata')
-    log.info(f"Intermediate data saved to {hdf_dump_file}")
-    return data
+        fun = interp1d(data['met'], data['temp_corr'], bounds_error=False,
+                       fill_value='extrapolate')
+
+        fit_result = robust_linear_fit(cltimes, fun(cltimes) - offsets)
+        m, q = fit_result.estimator_.coef_, fit_result.estimator_.intercept_
+
+        inlier_mask = fit_result.inlier_mask_
+        outlier_mask = np.logical_not(inlier_mask)
+
+        def fit_function(times, m, q):
+            return fun(times) - (times * m + q)
+
+        if self.plot_file is not None:
+            fig = plt.figure(figsize=(15, 10))
+            gs = plt.GridSpec(2, 1, hspace=0, height_ratios=(3, 2))
+            ax0 = plt.subplot(gs[0])
+            ax1 = plt.subplot(gs[1], sharex=ax0)
+            fine_times = np.arange(start, stop, 100)
+            ax0.scatter(clock_offset_table_all['met'],
+                        clock_offset_table_all['offset'] * 1000, alpha=0.5,
+                        color='k',
+                        label="Discarded offsets (bad)")
+            ax0.scatter(cltimes, offsets * 1000, label="Offsets used for fit")
+            if np.any(outlier_mask):
+                ax0.scatter(cltimes[outlier_mask],
+                            offsets[outlier_mask] * 1000,
+                            color='r', marker='x', s=30, zorder=10,
+                            label="Fit outliers")
+            ax0.plot(fine_times, fun(fine_times) * 1000, alpha=0.5)
+            new_tcorr = fit_function(fine_times, m, q)
+            ax0.plot(fine_times, new_tcorr * 1000)
+            ax0.set_ylabel("Offset (ms))")
+
+            ax1.scatter(clock_offset_table_all['met'],
+                        1e6 * (clock_offset_table_all['offset'] - fit_function(
+                            clock_offset_table_all['met'], m, q)),
+                        color='k', alpha=0.5)
+            ax1.scatter(cltimes, 1e6 * (offsets - fit_function(cltimes, m, q)))
+            if np.any(outlier_mask):
+                ax1.scatter(cltimes[outlier_mask],
+                            1e6 * (offsets - fit_function(cltimes, m, q))[
+                                outlier_mask],
+                            color='r', marker='x', s=30, zorder=10,
+                            label="Fit outliers")
+
+            ax1.axhline(0)
+            ax1.set_xlabel("MET (s)")
+            ax1.set_ylabel("Residual (us)")
+            ax1.set_ylim((-500, 500))
+
+            plt.savefig(self.plot_file)
+            plt.close(fig)
+
+        log.info(f"Correcting for a drift of {m} s/s")
+
+        data['temp_corr'] = data['temp_corr'] - (m * times + q)
+        return data
 
 
-def calculate_temperature_correction_table(met_start, met_stop,
-                                     temperature_file=None,
-                                     freqchange_file=None,
-                                     adjust=False, hdf_dump_file='dump.hdf5',
-                                     force_divisor=None, time_resolution=0.5):
+def temperature_correction_table(met_start, met_stop,
+                                 temptable=None,
+                                 freqchange_file=None,
+                                 hdf_dump_file='dump.hdf5',
+                                 force_divisor=None,
+                                 time_resolution=0.5):
+    import six
     if hdf_dump_file is not None and os.path.exists(hdf_dump_file):
         log.info(f"Reading cached data from file {hdf_dump_file}")
-        return pd.read_hdf(hdf_dump_file, key='tempdata')
+        result_table = pd.read_hdf(hdf_dump_file, key='tempdata')
+        mets = np.array(result_table['met'])
+        if (met_start > mets[10] or met_stop < mets[-20]) and (
+                met_stop - met_start < 3 * 365 * 86400):
+            log.warning(
+                "Interval not fully included in cached data. Recalculating.")
+        else:
+            good = (mets >= met_start - 86400) & (mets < met_stop + 86400)
+            return result_table[good]
 
-    mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
-    temptable = read_temptable(mjdstart=mjdstart - 5,
-                               mjdstop=mjdstop + 5,
-                               temperature_file=temperature_file)
+    if temptable is None or isinstance(temptable, six.string_types):
+        mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
+        temptable = read_temptable(mjdstart=mjdstart,
+                                   mjdstop=mjdstop,
+                                   temperature_file=temptable)
     if force_divisor is None:
         freq_changes_table = \
             read_freq_changes_table(freqchange_file=freqchange_file)
@@ -496,8 +552,8 @@ def calculate_temperature_correction_table(met_start, met_stop,
             break
 
         start, stop = met_intv
-        log.debug(f"Calculating temperature correction between "
-                 f"MET {start:d}--{stop:d}")
+        log.info(f"Calculating temperature correction between "
+                 f"MET {start:.1f}--{stop:.1f}")
 
         tempidx = np.searchsorted(temptable['met'], [start - 20, stop + 20])
 
@@ -518,8 +574,8 @@ def calculate_temperature_correction_table(met_start, met_stop,
             delay_function(times_fine) + last_corr - delay_function(last_time)
 
         new_data = Table(dict(met=times_fine,
-                        temp_corr=temp_corr,
-                        divisor=np.zeros_like(times_fine) + divisors[i]))
+                              temp_corr=temp_corr,
+                              divisor=np.zeros_like(times_fine) + divisors[i]))
 
         if np.any(temp_corr != temp_corr):
             log.error("Invalid data in temperature table")
@@ -529,8 +585,6 @@ def calculate_temperature_correction_table(met_start, met_stop,
         table[firstidx:firstidx + N] = new_data
         firstidx = firstidx + N
 
-        # new_table = pd.DataFrame(new_data)
-        # data = data.append(new_table, ignore_index=True)
         last_corr = temp_corr[-1]
         last_time = times_fine[-1]
 
@@ -539,127 +593,118 @@ def calculate_temperature_correction_table(met_start, met_stop,
 
     data = table.to_pandas()
 
-    if adjust:
-        log.info("Adjusting temperature correction")
-        data = adjust_temperature_correction(data)
-
     if hdf_dump_file is not None:
+        log.info(f"Saving intermediate data to {hdf_dump_file}...")
         data.to_hdf(hdf_dump_file, key='tempdata')
-    log.info(f"Intermediate data saved to {hdf_dump_file}")
+        log.info(f"Done.")
     return data
 
 
-def adjust_temperature_correction(data):
-    from scipy.optimize import curve_fit
-    times = np.array(data['met'])
-    start = times[0]
-    stop = times[-1]
-
-    clock_offset_table = read_clock_offset_table()
-    # Find relevant clock offsets
-    good_times = \
-        (clock_offset_table['met'] >= start) & (
-                    clock_offset_table['met'] <= stop)
-    clock_offset_table = clock_offset_table[good_times]
-    no_flag = ~clock_offset_table['flag']
-    N = len(clock_offset_table)
-    clock_offset_table = clock_offset_table[no_flag]
-    n = len(clock_offset_table)
-    log.info(f"Found {n}/{N} valid clock offset measurements "
-             f"between MET {int(start)}--{int(stop)}")
-
-    cltimes = clock_offset_table['met']
-    offsets = clock_offset_table['offset']
-
-    first_clock_idx = np.argmin(np.abs(times - cltimes[0]))
-
-    data['temp_corr_rough'] = np.array(data['temp_corr'])
-
-    data['temp_corr'] = \
-        data['temp_corr_rough'] - data['temp_corr_rough'][first_clock_idx] + \
-        offsets[0]
-
-    fun = interp1d(data['met'], data['temp_corr'])
-
-    def fit_function(times, m, q):
-        return fun(times) - ((times - cltimes[0]) * m + q)
-
-    popt, pcov = curve_fit(fit_function, cltimes,
-                           clock_offset_table['offset'])
-
-    m, q = popt
-
-    log.info(f"Correcting for a drift of {m} s/s")
-
-    data['temp_corr'] = data['temp_corr'] - (m * (times - cltimes[0]) + q)
-    return data
-
-
-def temperature_correction_fun(met_start, met_stop, adjust=True,
-                               force_divisor=None, temperature_file=None):
-    data = calculate_temperature_correction(met_start, met_stop, adjust=adjust,
-                                            force_divisor=force_divisor,
-                                            temperature_file=temperature_file)
-    return interp1d(np.array(data['met']), np.array(data['temp_corr']),
-                    fill_value="extrapolate", bounds_error=False)
 
 
 def create_clockfile(met_start, met_stop):
-    data = calculate_temperature_correction(met_start, met_stop, adjust=True)
+    data = temperature_correction_table(met_start, met_stop, adjust=True)
     pass
 
 
-def apply_clock_correction(events_file, outfile=None,
-                           adjust=True, force_divisor=None,
-                           temperature_file=None):
-    import shutil
-    ext = splitext_improved(os.path.basename(events_file))[1]
-    if outfile is None:
-        outfile = events_file.replace(ext, "_tc" + ext)
-    if outfile == events_file:
-        raise ValueError("outfile == events_file")
+def robust_linear_fit(x, y):
+    from sklearn import linear_model
+    X = x.reshape(-1, 1)
+    # # Robustly fit linear model with RANSAC algorithm
+    ransac = linear_model.RANSACRegressor(residual_threshold=0.0002)
+    ransac.fit(X, y)
+    return ransac
 
-    log.info(f"Opening {events_file}")
 
-    shutil.copyfile(events_file, outfile)
+class NuSTARobs():
+    def __init__(self, events_file, outfile=None,
+                 adjust=True, force_divisor=None,
+                 temperature_file=None, hdf_dump_file=None):
+        self.events_file = events_file
+        root, ext = splitext_improved(os.path.basename(events_file))
+        if outfile is None:
+            outfile = events_file.replace(ext, "_tc" + ext)
+        if outfile == events_file:
+            raise ValueError("outfile == events_file")
+        self.outfile = outfile
+        self.adjust = adjust
+        self.force_divisor = force_divisor
+        self.temperature_file = temperature_file
+        self.tstart = None
+        self.tstop = None
+        self.correction_start = None
+        self.correction_stop = None
+        self.read_observation_info()
+        mjdstart, mjdstop = sec_to_mjd([self.tstart, self.tstop])
+        self.clock_correction = ClockCorrection(temperature_file,
+                                                mjdstart=mjdstart,
+                                                mjdstop=mjdstop,
+                                                temperature_dt=10,
+                                                adjust_absolute_timing=adjust,
+                                                force_divisor=force_divisor,
+                                                label=root, additional_days=2,
+                                                clock_offset_table=None,
+                                                hdf_dump_file=hdf_dump_file)
+        self.temperature_correction_fun = \
+            self.clock_correction.correct_met
 
-    with fits.open(outfile) as hdul:
-        event_times = hdul[1].data['TIME']
-        start, stop = event_times[0], event_times[-1]
-        log.info(f"Calculating temperature correction")
-        corr_fun = \
-            temperature_correction_fun(start - 2*86400,
-                                       stop + 2*86400,
-                                       adjust=adjust,
-                                       force_divisor=force_divisor,
-                                       temperature_file=temperature_file)
-        hdul[1].data['TIME'] = event_times - corr_fun(event_times)
-        hdul.writeto(outfile, overwrite=True)
+    def read_observation_info(self):
+        with fits.open(self.events_file) as hdul:
+            hdr = hdul[1].header
+            self.tstart, self.tstop = hdr['TSTART'], hdr['TSTOP']
+            self.correction_start = self.tstart - 2 * 86400
+            self.correction_stop = self.tstop + 2 * 86400
 
-    return outfile
+
+    def apply_clock_correction(self):
+        events_file = self.events_file
+        outfile = self.outfile
+
+        log.info(f"Opening {events_file}")
+
+        shutil.copyfile(events_file, outfile)
+
+        with fits.open(outfile) as hdul:
+            event_times = hdul[1].data['TIME']
+            log.info(f"Calculating temperature correction")
+            corr_fun = \
+                self.temperature_correction_fun
+            hdul[1].data['TIME'] = event_times - corr_fun(event_times)
+            hdul.writeto(outfile, overwrite=True)
+
+        return outfile
 
 
 def main_tempcorr(args=None):
     import argparse
     description = ('Apply experimental temperature correction to NuSTAR'
-                   'event files')
+                   'event files. For very recent ToO observations not covered'
+                   'by the temperature history file or the frequency change '
+                   'file, use the -t, --no-adjust and -D options.')
     parser = argparse.ArgumentParser(description=description)
 
     parser.add_argument("file", help="Uncorrected event file")
     parser.add_argument("-o", "--outfile", default=None,
                         help="Output file name (default <inputfname>_tc.evt)")
     parser.add_argument("-t", "--tempfile", default=None,
-                        help="Temperature file")
+                        help="Temperature file (e.g. the nu<OBSID>_eng.hk.gz "
+                             "file in the auxil/directory "
+                             "or the tp_tcxo*.csv file)")
+    parser.add_argument("--cache", default=None,
+                        help="HDF5 dump file used as cache (ext. hdf5)")
     parser.add_argument("--no-adjust",
                         help="Do not adjust using tabulated clock offsets",
                         action='store_true', default=False)
     parser.add_argument("-D", "--force-divisor", default=None, type=float,
-                        help="Force frequency divisor to this value")
+                        help="Force frequency divisor to this value. Typical"
+                             "values are around 24000330")
     args = parser.parse_args(args)
 
-    outfile = apply_clock_correction(args.file, outfile=args.outfile,
-                                     adjust=not args.no_adjust,
-                                     force_divisor=args.force_divisor,
-                                     temperature_file=args.tempfile)
+    observation = NuSTARobs(args.file, outfile=args.outfile,
+                            adjust=not args.no_adjust,
+                            force_divisor=args.force_divisor,
+                            temperature_file=args.tempfile,
+                            hdf_dump_file=args.cache)
+    outfile = observation.apply_clock_correction()
     return outfile
 
