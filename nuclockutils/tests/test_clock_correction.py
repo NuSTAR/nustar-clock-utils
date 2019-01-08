@@ -3,7 +3,7 @@ import numpy as np
 import os
 import pytest
 from nuclockutils import read_clock_offset_table, read_freq_changes_table
-from nuclockutils import read_temptable, apply_clock_correction, main_tempcorr
+from nuclockutils import read_temptable, main_tempcorr
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
@@ -45,7 +45,7 @@ class TestExecution(object):
 
     @pytest.mark.remote_data
     def test_fun_from_file(self):
-        outfile = apply_clock_correction(self.orbfile, outfile=None)
+        outfile = main_tempcorr([self.orbfile])
         assert os.path.exists(outfile)
         cleanup_hdf5()
 
