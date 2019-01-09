@@ -1,0 +1,9 @@
+numpy
+scipy
+astropy
+matplotlib
+pandas
+sklearn
+git+https://github.com/matteobachetti/pint.git@ba76d8a35ac75d9c3479eac385fdaf260654839c
+tqdm
+jplephem
