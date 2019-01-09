@@ -37,12 +37,12 @@ env:
 
         # List runtime dependencies for the package that are available as conda
         # packages here.
-        - CONDA_DEPENDENCIES='numpy scipy astropy matplotlib pandas'
+        - CONDA_DEPENDENCIES='numpy scipy astropy matplotlib pandas sklearn'
         - CONDA_DEPENDENCIES_DOC='sphinx-astropy'
 
         # List other runtime dependencies for the package that are available as
         # pip packages here.
-        - PIP_DEPENDENCIES='git+https://github.com/nanograv/pint.git tqdm jplephem'
+        - PIP_DEPENDENCIES='git+https://github.com/nanograv/pint.git@ba76d8a35ac75d9c3479eac385fdaf260654839c tqdm jplephem'
 
         # Conda packages for affiliated packages are hosted in channel
         # "astropy" while builds for astropy LTS with recent numpy versions
