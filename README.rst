@@ -51,6 +51,12 @@ Very recent observation, before an update to the clock offset and clock divisor 
 The -D option specifies the clock divisor (the frequency of the quartz oscillator in the spacecraft TCXO).
 If unkown, give something around 24000300 and be aware that the clock will be stable but will run fast or slow.
 
+To barycenter the corrected data, at the moment you need a tempo-format parameter file with at least the
+name and the coordinates.
+
+.. code-block ::
+
+    $ nustar_barycorr nu101010101010A01_cl_tc.evt nu101010101010A.attorb.gz TEMPO_PARAMETER_FILE.par
 
 License
 -------
