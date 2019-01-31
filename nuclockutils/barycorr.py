@@ -2,6 +2,7 @@ from astropy.table import Table
 import numpy as np
 from scipy.interpolate import interp1d
 from .utils import filter_with_region
+from astropy import log
 
 
 class OrbitalFunctions():
@@ -54,11 +55,12 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
     from astropy.io import fits
     from pint.observatory.nustar_obs import NuSTARObs
     from pint.event_toas import load_fits_TOAs
-    from pint.models import get_model
+    from pint.models import get_model, StandardTimingModel
     from pint.toa import get_TOAs_list
     from shutil import copyfile
     from .utils import splitext_improved, NUSTAR_MJDREF, sec_to_mjd
     from astropy.time import Time
+    from astropy.coordinates import Angle
     import os
     import warnings
 
@@ -75,13 +77,27 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
     tl = load_fits_TOAs(evfile, mission='nustar', timeref='LOCAL')
 
     # Read in model
-    modelin = get_model(parfile)
+    if parfile is not None:
+        log.info(f"Reading source position from {parfile}")
+        modelin = get_model(parfile)
+    else:
+        log.warning("No parfile specified. Using information in FITS file")
+        # Construct model by hand
+        with fits.open(evfile, memmap=True) as hdul:
+            ra = hdul['EVENTS'].header['RA_OBJ']
+            dec = hdul['EVENTS'].header['DEC_OBJ']
+        modelin = StandardTimingModel
+        # Should check if 12:13:14.2 syntax is used and support that as well!
+        modelin.RAJ.quantity = Angle(ra, unit="deg")
+        modelin.DECJ.quantity = Angle(dec, unit="deg")
+        modelin.DM.quantity = 0
 
     ts = get_TOAs_list(tl, include_bipm=False,
         include_gps=False, planets=False, tdb_method='default',
                        ephem='DE421')
     ts.filename = orbfile
     mjds = modelin.get_barycentric_toas(ts)
+    log.info(f"Creating output file {outfile}")
     copyfile(evfile, outfile)
 
     with fits.open(outfile, memmap=True) as hdul:
@@ -128,7 +144,8 @@ def main_barycorr(args=None):
     parser.add_argument("file", help="Uncorrected event file")
     parser.add_argument("orbitfile", help="Orbit file")
     parser.add_argument("parfile", help="Parameter file in TEMPO/TEMPO2 "
-                                        "format (for precise coordinates)")
+                                        "format (for precise coordinates)",
+                        nargs="?", default=None)
     parser.add_argument("-o", "--outfile", default=None,
                         help="Output file name (default <inputfname>_tc.evt)")
     parser.add_argument("--overwrite",
