@@ -1,6 +1,7 @@
 from astropy.table import Table
 import numpy as np
 from scipy.interpolate import interp1d
+from .utils import filter_with_region
 
 
 class OrbitalFunctions():
@@ -134,7 +135,14 @@ def main_barycorr(args=None):
                         help="Overwrite existing data",
                         action='store_true', default=False)
 
+    parser.add_argument("-r", "--region", default=None, type=str,
+                        help="Filter with ds9-compatible region file. MUST be"
+                             " a circular region in the FK5 frame")
+
     args = parser.parse_args(args)
+
+    if args.region is not None:
+        args.file = filter_with_region(args.file)
 
     outfile = \
         barycorr(args.file, args.orbitfile, args.parfile, outfile=args.outfile,

@@ -10,6 +10,7 @@ from astropy.time import Time
 from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
+from .utils import filter_with_region
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -600,8 +601,6 @@ def temperature_correction_table(met_start, met_stop,
     return data
 
 
-
-
 def create_clockfile(met_start, met_stop):
     data = temperature_correction_table(met_start, met_stop, adjust=True)
     pass
@@ -696,13 +695,21 @@ def main_tempcorr(args=None):
     parser.add_argument("-D", "--force-divisor", default=None, type=float,
                         help="Force frequency divisor to this value. Typical "
                              "values are around 24000330")
+    parser.add_argument("-r", "--region", default=None, type=str,
+                        help="Filter with ds9-compatible region file. MUST be"
+                             " a circular region in the FK5 frame")
+
     args = parser.parse_args(args)
+
+    if args.region is not None:
+        args.file = filter_with_region(args.file)
 
     observation = NuSTARCorr(args.file, outfile=args.outfile,
                              adjust=not args.no_adjust,
                              force_divisor=args.force_divisor,
                              temperature_file=args.tempfile,
                              hdf_dump_file=args.cache)
+
     outfile = observation.apply_clock_correction()
     return outfile
 
