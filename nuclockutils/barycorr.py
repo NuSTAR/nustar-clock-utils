@@ -3,6 +3,7 @@ import numpy as np
 from scipy.interpolate import interp1d
 from .utils import filter_with_region
 from astropy import log
+from .utils import NUSTAR_MJDREF
 
 
 class OrbitalFunctions():
@@ -50,11 +51,68 @@ def get_orbital_functions(orbfile):
     return orbfunc
 
 
+def load_event_and_GTI_TOAs(eventname,
+                            timesys=None, timeref=None):
+    '''
+    Read photon event times out of a FITS file as PINT TOA objects.
+
+    Correctly handles raw event files, or ones processed with axBary to have
+    barycentered  TOAs. Different conditions may apply to different missions.
+
+    Parameters
+    ----------
+    eventname : str
+        File name of the FITS event list
+    timesys : str, default None
+        Force this time system
+    timeref : str, default None
+        Forse this time reference
+
+    Returns
+    -------
+    toalist : list of TOA objects
+    '''
+    # Load photon times from event file
+    from pint.event_toas import check_timeref, check_timesys, _get_timesys, \
+        _get_timeref, _default_obs_and_scale, read_fits_event_mjds_tuples
+    from astropy.io import fits
+    from pint import toa
+    hdulist = fits.open(eventname)
+
+    if timesys is None:
+        timesys = _get_timesys(hdulist[1])
+    if timeref is None:
+        timeref = _get_timeref(hdulist[1])
+    check_timesys(timesys)
+    check_timeref(timeref)
+
+    obs, scale = _default_obs_and_scale("nustar", timesys, timeref)
+
+    # Read time column from FITS file
+    mjds = hdulist['EVENTS'].data["TIME"] / 86400 + NUSTAR_MJDREF
+    gmjds0 = hdulist['GTI'].data["START"] / 86400 + NUSTAR_MJDREF
+    gmjds1 = hdulist['GTI'].data["STOP"] / 86400 + NUSTAR_MJDREF
+
+    hdulist.close()
+
+    toalist = [None] * len(mjds)
+    for i in range(len(mjds)):
+        toalist[i] = toa.TOA(mjds[i], obs=obs, scale=scale)
+    gtoalist0 = [None] * len(gmjds0)
+    for i in range(len(gmjds0)):
+        gtoalist0[i] = toa.TOA(gmjds0[i], obs=obs, scale=scale)
+    gtoalist1 = [None] * len(gmjds1)
+    for i in range(len(gmjds1)):
+        gtoalist1[i] = toa.TOA(gmjds1[i], obs=obs, scale=scale)
+
+    return toalist, gtoalist0, gtoalist1
+
+
 def barycorr(evfile, orbfile, parfile, outfile=None,
              overwrite=False):
     from astropy.io import fits
     from pint.observatory.nustar_obs import NuSTARObs
-    from pint.event_toas import load_fits_TOAs
+
     from pint.models import get_model, StandardTimingModel
     from pint.toa import get_TOAs_list
     from shutil import copyfile
@@ -74,7 +132,7 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
         raise RuntimeError('Output file exists')
 
     NuSTARObs(name='NuSTAR',FPorbname=orbfile, tt2tdb_mode='pint')
-    tl = load_fits_TOAs(evfile, mission='nustar', timeref='LOCAL')
+    tl, startl, stopl = load_event_and_GTI_TOAs(evfile, timeref='LOCAL')
 
     # Read in model
     if parfile is not None:
@@ -95,13 +153,24 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
     ts = get_TOAs_list(tl, include_bipm=False,
         include_gps=False, planets=False, tdb_method='default',
                        ephem='DE421')
+    starts = get_TOAs_list(startl, include_bipm=False,
+        include_gps=False, planets=False, tdb_method='default',
+                       ephem='DE421')
+    stops = get_TOAs_list(stopl, include_bipm=False,
+        include_gps=False, planets=False, tdb_method='default',
+                       ephem='DE421')
     ts.filename = orbfile
     mjds = modelin.get_barycentric_toas(ts)
+    startmjds = modelin.get_barycentric_toas(starts)
+    stopmjds = modelin.get_barycentric_toas(stops)
+
     log.info(f"Creating output file {outfile}")
     copyfile(evfile, outfile)
 
     with fits.open(outfile, memmap=True) as hdul:
         mets = (mjds.value - NUSTAR_MJDREF) * 86400
+        gtistarts = (startmjds.value - NUSTAR_MJDREF) * 86400
+        gtistops = (stopmjds.value - NUSTAR_MJDREF) * 86400
 
         uncorr_mets = hdul[1].data['TIME']
         start_corr = mets[0] - uncorr_mets[0]
@@ -113,7 +182,10 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
         stop = hdul[1].header['TSTOP'] + stop_corr
         stop = Time(sec_to_mjd(stop), format='mjd')
 
-        hdul[1].data['TIME'] = mets
+        hdul["EVENTS"].data['TIME'] = mets
+        hdul['GTI'].data['START'] = gtistarts
+        hdul['GTI'].data['STOP'] = gtistops
+
         version = '0.0dev'
         for hdu in hdul:
             hdu.header['CREATOR'] = f'NuSTAR Clock Utils - v. {version}'
