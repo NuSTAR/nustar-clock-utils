@@ -122,8 +122,8 @@ def barycorr(evfile, orbfile, parfile, outfile=None,
     import os
     import warnings
 
-    warnings.warn("At the moment, GTIs are not barycentered. "
-                  "Also, TSTART, TSTOP etc. might be affected by leap seconds")
+    warnings.warn("At the moment, TSTART, TSTOP etc. might be affected "
+                  "by leap seconds")
     if outfile is None:
         ext = splitext_improved(evfile)[1]
         outfile = evfile.replace(ext, '_bary' + ext)
