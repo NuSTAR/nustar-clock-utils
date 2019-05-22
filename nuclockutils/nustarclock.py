@@ -363,24 +363,39 @@ class ClockCorrection():
                  clock_offset_table=None,
                  hdf_dump_file='dumped_data.hdf5'):
         self.temperature_file = temperature_file
+        # self.temptable = None
+        self.read_temptable()
+        if mjdstart is None:
+            mjdstart = sec_to_mjd(self.temptable['met'].min())
+        if mjdstop is None:
+            mjdstop = sec_to_mjd(self.temptable['met'].max())
+
         self.mjdstart = mjdstart - additional_days / 2
         self.mjdstop = mjdstop + additional_days / 2
 
         if mjdstart is not None:
             self.met_start = (mjdstart - NUSTAR_MJDREF) * 86400
             self.met_stop = (mjdstop - NUSTAR_MJDREF) * 86400
-        self.temperature_dt = temperature_dt
-        self.temptable = None
 
-        self.read_temptable()
+        self.temperature_dt = temperature_dt
+
         self.force_divisor = force_divisor
         self.adjust_absolute_timing = adjust_absolute_timing
 
         self.hdf_dump_file = hdf_dump_file
         self.plot_file = label + "_clock_adjustment.png"
         self.clock_offset_table = clock_offset_table
-        self.correct_met = \
-            self.temperature_correction_fun(adjust=self.adjust_absolute_timing)
+
+        self.temperature_correction_data = \
+            temperature_correction_table(
+                self.met_start, self.met_stop,
+                force_divisor=self.force_divisor,
+                temptable = self.temptable,
+                hdf_dump_file=self.hdf_dump_file)
+
+        # self.correct_met = \
+        #     self.temperature_correction_fun(adjust=self.adjust_absolute_timing)
+
         if label is None:
             label = f"{self.met_start}-{self.met_stop}"
 
@@ -391,12 +406,8 @@ class ClockCorrection():
                                         dt=self.temperature_dt)
 
     def temperature_correction_fun(self, adjust=False):
-        data = \
-            temperature_correction_table(
-                self.met_start, self.met_stop,
-                force_divisor=self.force_divisor,
-                temptable = self.temptable,
-                hdf_dump_file=self.hdf_dump_file)
+        data = self.temperature_correction_data
+
         if adjust:
             log.info("Adjusting temperature correction")
             data = self.adjust_temperature_correction(data)
@@ -646,7 +657,7 @@ class NuSTARCorr():
                                                 clock_offset_table=None,
                                                 hdf_dump_file=hdf_dump_file)
         self.temperature_correction_fun = \
-            self.clock_correction.correct_met
+            self.clock_correction.temperature_correction_fun(adjust=adjust)
 
     def read_observation_info(self):
         with fits.open(self.events_file) as hdul:
@@ -712,4 +723,20 @@ def main_tempcorr(args=None):
 
     outfile = observation.apply_clock_correction()
     return outfile
+
+
+def main_create_clockfile(args=None):
+    import argparse
+    description = ('Calculate experimental clock file for NuSTAR, using a '
+                   'temperature-driven correction for the onboard TCXO.')
+    parser = argparse.ArgumentParser(description=description)
+
+    parser.add_argument("-o", "--outfile", default=None,
+                        help="Output file name")
+    parser.add_argument("-t", "--tempfile", default=None,
+                        help="Temperature file (e.g. tp_tcxo*.csv)")
+    parser.add_argument("--cache", default=None,
+                        help="HDF5 dump file used as cache (ext. hdf5)")
+
+    args = parser.parse_args(args)
 
