@@ -29,6 +29,8 @@ To create a clock file
 ~~~~~~~~~~~~~~~~~~~~~~
 Pass the temperature table, the clock offset table, the frequency change table, and give an output file name:
 
+.. code-block ::
+
     $ nustar_clockfile tp_eps_ceu_txco_tmp.csv nustar_clock_offsets-2018-10-30.dat Craig/nustar_freq_changes-2018-12-06_corr.dat -o nuCclock20100101v099.fits.gz
 
 This will produce the wanted clock file and a diagnostic plot showing the scatter of clock offsets around the temperature correction, e.g.
