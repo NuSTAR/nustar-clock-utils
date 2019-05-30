@@ -36,7 +36,7 @@ Pass the temperature table, the clock offset table, the frequency change table, 
         Craig/nustar_freq_changes-2018-12-06_corr.dat \
         -o nuCclock20100101v099.fits.gz
 
-This will produce the wanted clock file and a diagnostic plot showing the scatter of clock offsets around the temperature correction, e.g.
+This will produce the wanted clock file and a diagnostic plot in an html file called ``nuCclock20100101v099.html`` showing the scatter of clock offsets around the temperature correction, e.g.
 
 .. image:: docs/imgs/diagnostics.png
 
