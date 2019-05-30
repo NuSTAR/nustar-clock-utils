@@ -3,7 +3,7 @@ import os
 import shutil
 
 import numpy as np
-from astropy.table import Table
+from astropy.table import Table, vstack
 import pandas as pd
 from astropy.time import Time
 
@@ -234,10 +234,16 @@ def _filter_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
 
 def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
     if mjdstart is not None or mjdstop is not None:
+        mjdstart_use = mjdstart
+        mjdstop_use = mjdstop
+        if mjdstart is not None:
+            mjdstart_use -= 10
+        if mjdstop is not None:
+            mjdstop_use += 10
         log.info("Filtering table...")
         tmpfile = _filter_table(temperature_file,
-                                start_date=mjdstart - 10,
-                                end_date=mjdstop + 10, tmpfile='tmp.csv')
+                                start_date=mjdstart_use,
+                                end_date=mjdstop_use, tmpfile='tmp.csv')
         log.info("Done")
     else:
         tmpfile = temperature_file
@@ -252,6 +258,7 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
     temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * 86400
     temptable.remove_column('Time')
     temptable.rename_column('tp_eps_ceu_txco_tmp', 'temperature')
+    temptable["temperature"] = np.array(temptable["temperature"], dtype=float)
     return temptable
 
 
@@ -1144,3 +1151,40 @@ def main_create_clockfile(args=None):
     renderer = hv.renderer('bokeh')
     renderer.save(plot, outfig)
 
+
+def main_update_temptable(args=None):
+    import argparse
+    description = ('Calculate experimental clock file for NuSTAR, using a '
+                   'temperature-driven correction for the onboard TCXO.')
+    parser = argparse.ArgumentParser(description=description)
+
+    parser.add_argument("tempfile", type=str,
+                        help="Temperature file (e.g. tp_tcxo*.csv)")
+    parser.add_argument("-o", "--outfile", default=None,
+                        help="Output HDF5 file name")
+
+    args = parser.parse_args(args)
+
+    last_measurement = None
+    existing_table = None
+    if os.path.exists(args.outfile):
+        log.info("Reading existing temperature table")
+        existing_table = Table.read(args.outfile)
+        last_measurement = existing_table['mjd'][-1] + 0.001 / 86400
+
+    log.info("Reading new temperature values")
+    new_table = read_csv_temptable(temperature_file=args.tempfile,
+                                   mjdstart=last_measurement)
+
+    new_table.write("new.csv")
+    if last_measurement is not None:
+        new_values = new_table['mjd'] > last_measurement
+        if not np.any(new_values):
+            log.info("Temperature table is up to date")
+            return
+
+        log.info("Updating temperature table")
+        new_table = vstack((existing_table, new_table[new_values]))
+
+    log.info(f"Saving to {args.outfile}")
+    new_table.write(args.outfile, path="temptable", overwrite=True)
