@@ -24,6 +24,19 @@ Installation
 
 Usage
 -----
+
+To create a clock file
+~~~~~~~~~~~~~~~~~~~~~~
+Pass the temperature table, the clock offset table, the frequency change table, and give an output file name:
+
+    $ nustar_clockfile tp_eps_ceu_txco_tmp.csv nustar_clock_offsets-2018-10-30.dat Craig/nustar_freq_changes-2018-12-06_corr.dat -o nuCclock20100101v099.fits.gz
+
+This will produce the wanted clock file and a diagnostic plot showing the scatter of clock offsets around the temperature correction, e.g.
+
+.. image:: docs/imgs/diagnostics.png
+
+To correct a single event file (deprecated)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 You should have at least a (non-barycentered) event file and some temperature information.
 The latter can be found in the engineering housekeeping file (``auxil/nuXXXXXXXXXX_eng.hk.gz``) in recent observations.
 Otherwise the SOC can provide a comma-separated file with the temperature information.
