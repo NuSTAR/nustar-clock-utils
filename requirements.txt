@@ -4,10 +4,12 @@ astropy
 matplotlib
 pandas
 sklearn
-git+https://github.com/matteobachetti/pint.git@ba76d8a35ac75d9c3479eac385fdaf260654839c
+git+https://github.com/nanograv/pint.git@e5f6b260422898f63c88d636712fcc1cdd76cf20
 tqdm
 jplephem
 datashader
 bokeh
 holoviews
 statsmodels
+h5py
+
