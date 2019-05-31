@@ -865,8 +865,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
 
     all_data_res = pd.DataFrame({'met': clock_mets[:-1],
                              'mjd': np.array(clock_mjds[:-1], dtype=int),
-                             'doy': clock_mjds[:-1],
-                             'utc': clock_mjds[:-1],
+                             'doy': dates.strftime("%Y:%j"),
+                             'utc': dates.strftime("%Y:%m:%d"),
                              'residual': clock_residuals_detrend * 1e6,
                              'station': clock_offset_table['station'][:-1]})
     all_data_res = hv.Dataset(all_data_res, [('met', 'Mission Elapsed Time'),
