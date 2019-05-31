@@ -832,10 +832,25 @@ def plot_scatter(new_clock_table, clock_offset_table):
                         window=5 * 86400)
 
     all_data = pd.DataFrame({'met': clock_mets[:-1],
+                             'offset': clock_offset_table['offset'][:-1],
+                             'station': clock_offset_table['station'][:-1]})
+    all_data = hv.Dataset(all_data, [('met', 'Mission Elapsed Time'),
+                                     ('station', 'Ground Station')],
+                                    [('offset', 'Clock Offset (s)')])
+    plot_0 = all_data.to.scatter('met', ['offset'],
+                                 groupby='station').options(
+        color_index='station', alpha=0.5).overlay('station')
+    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint))
+    plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350)).opts(
+                             ylim=(-0.1, 0.8)) * plot_0a
+
+    all_data_res = pd.DataFrame({'met': clock_mets[:-1],
                              'residual': clock_residuals_detrend * 1e6,
                              'station': clock_offset_table['station'][:-1]})
-    all_data = hv.Dataset(all_data, ['met', 'station'], ['residual'])
-    plot_1 = all_data.to.scatter('met', ['residual'],
+    all_data_res = hv.Dataset(all_data_res, [('met', 'Mission Elapsed Time'),
+                                     ('station', 'Ground Station')],
+                                    [('residual', 'Residuals (us)')])
+    plot_1 = all_data_res.to.scatter('met', ['residual'],
                                  groupby='station').options(
         color_index='station', alpha=0.5).overlay('station')
     plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6}).opts(
@@ -843,8 +858,10 @@ def plot_scatter(new_clock_table, clock_offset_table):
     plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
         opts.Curve(color='k'))
 
-    return plot_1.opts(opts.Scatter(width=800, height=600)).opts(
-        ylim=(-700, 700)) * plot_1b * plot_1a
+    plot_1_all = plot_1.opts(opts.Scatter(width=900, height=350)).opts(
+                             ylim=(-700, 700)) * plot_1b * plot_1a
+
+    return hv.Layout(plot_0_all + plot_1_all).cols(1)
 
 
 def robust_linear_fit(x, y):
