@@ -821,36 +821,61 @@ def calculate_clock_function(new_clock_table, clock_offset_table):
 
 
 def plot_scatter(new_clock_table, clock_offset_table):
+    from bokeh.models import HoverTool
     yint, good_mets = calculate_clock_function(new_clock_table,
                                                clock_offset_table)
     clock_offset_table = clock_offset_table[good_mets]
     clock_mets = clock_offset_table['met']
+    clock_mjds = clock_offset_table['mjd']
     clock_residuals_detrend = clock_offset_table['offset'][:-1] - yint
 
     control_points, rolling_std = \
         get_rolling_std(clock_residuals_detrend, clock_offset_table[:-1],
                         window=5 * 86400)
 
+    dates = Time(clock_mjds[:-1], format='mjd')
+
     all_data = pd.DataFrame({'met': clock_mets[:-1],
+                             'mjd': np.array(clock_mjds[:-1], dtype=int),
+                             'doy': dates.strftime("%Y:%j"),
+                             'utc': dates.strftime("%Y:%m:%d"),
                              'offset': clock_offset_table['offset'][:-1],
                              'station': clock_offset_table['station'][:-1]})
     all_data = hv.Dataset(all_data, [('met', 'Mission Elapsed Time'),
                                      ('station', 'Ground Station')],
-                                    [('offset', 'Clock Offset (s)')])
-    plot_0 = all_data.to.scatter('met', ['offset'],
+                                    [('offset', 'Clock Offset (s)'),
+                                     ('mjd', 'MJD'),
+                                     ('doy', 'DOY'),
+                                     ('utc', 'UT')])
+
+    tooltips = [
+        ('MET', '@met'),
+        ('MJD', '@mjd'),
+        ('DOY', '@doy'),
+        ('UT', '@utc'),
+    ]
+    hover = HoverTool(tooltips=tooltips)
+
+    plot_0 = all_data.to.scatter('met', ['offset', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
         color_index='station', alpha=0.5).overlay('station')
     plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint))
-    plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350)).opts(
+    plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
 
     all_data_res = pd.DataFrame({'met': clock_mets[:-1],
+                             'mjd': np.array(clock_mjds[:-1], dtype=int),
+                             'doy': clock_mjds[:-1],
+                             'utc': clock_mjds[:-1],
                              'residual': clock_residuals_detrend * 1e6,
                              'station': clock_offset_table['station'][:-1]})
     all_data_res = hv.Dataset(all_data_res, [('met', 'Mission Elapsed Time'),
                                      ('station', 'Ground Station')],
-                                    [('residual', 'Residuals (us)')])
-    plot_1 = all_data_res.to.scatter('met', ['residual'],
+                                    [('residual', 'Residuals (us)'),
+                                     ('mjd', 'MJD'),
+                                     ('doy', 'DOY'),
+                                     ('utc', 'UT')])
+    plot_1 = all_data_res.to.scatter('met', ['residual', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
         color_index='station', alpha=0.5).overlay('station')
     plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6}).opts(
@@ -858,7 +883,7 @@ def plot_scatter(new_clock_table, clock_offset_table):
     plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
         opts.Curve(color='k'))
 
-    plot_1_all = plot_1.opts(opts.Scatter(width=900, height=350)).opts(
+    plot_1_all = plot_1.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-700, 700)) * plot_1b * plot_1a
 
     return hv.Layout(plot_0_all + plot_1_all).cols(1)
@@ -1035,7 +1060,7 @@ def temperature_delay(temptable, divisor,
 
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
 
-    delay = cumtrapz(clock_rate_corr, times_fine, initial=0)
+    # delay = cumtrapz(clock_rate_corr, times_fine, initial=0)
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
     #     print(np.max(np.abs(delay - delay_sim)))
     #     delay = np.cumsum(dt * clock_rate_corr)
