@@ -3,7 +3,7 @@ import numpy as np
 import os
 import pytest
 from nuclockutils import read_clock_offset_table, read_freq_changes_table
-from nuclockutils import read_temptable, main_tempcorr
+from nuclockutils import read_temptable, main_tempcorr, main_create_clockfile
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')

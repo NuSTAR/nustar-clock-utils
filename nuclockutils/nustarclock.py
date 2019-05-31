@@ -29,6 +29,8 @@ ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
                                dtype=np.longdouble)
 
 
+
+
 def get_rolling_std(clock_residuals_detrend,
                     clock_offset_table, window=20 * 86400):
     malindi_stn = clock_offset_table['station'] == 'MLD'
@@ -152,6 +154,19 @@ def read_clock_offset_table(clockoffset_file=None):
     return clock_offset_table
 
 
+FREQ_CHANGE_DB= {"delete": [77509247, 78720802],
+                 "add": [(1023848462, 77506869, 24000340),
+                         (1025060017, 78709124, 24000337),
+                         (0, 102576709, 24000339),
+                         (1051488464, 105149249, 24000336),
+                         (0, 182421890, 24000334),
+                         (1157021125, 210681910, 24000337),
+                         ( 0, 215657278, 24000333),
+                         (0, 215794126, 24000328),
+                         (1174597307, 228258092, 24000334),
+                         (1174759273, 228420058, 24000334)]}
+
+
 def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     """
     Parameters
@@ -170,6 +185,14 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
                                 format='csv', delimiter=' ',
                                 comment="\s*#",
                                 names=['uxt', 'met', 'divisor'])
+    log.info("Correcting known bad frequency points")
+    for time in FREQ_CHANGE_DB['delete']:
+        bad_time_idx = freq_changes_table['met'] == time
+        freq_changes_table[bad_time_idx] = [0, 0, 0]
+    for line in FREQ_CHANGE_DB['add']:
+        freq_changes_table.add_row(line)
+    freq_changes_table = freq_changes_table[freq_changes_table['met'] > 0]
+    freq_changes_table.sort('met')
 
     freq_changes_table['mjd'] = sec_to_mjd(freq_changes_table['met'])
     freq_changes_table.remove_row(len(freq_changes_table) - 1)
@@ -177,6 +200,8 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
         np.abs(freq_changes_table['divisor'] - 2.400034e7) > 20
     if filter_bad:
         freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
+
+
     return freq_changes_table
 
 
@@ -341,7 +366,7 @@ class ClockCorrection():
     def __init__(self, temperature_file, mjdstart=None, mjdstop=None,
                  temperature_dt=10, adjust_absolute_timing=False,
                  force_divisor=None, label="", additional_days=2,
-                 clock_offset_table=None,
+                 clock_offset_file=None,
                  hdf_dump_file='dumped_data.hdf5',
                  freqchange_file=None,
                  spline_through_residuals=False):
@@ -380,7 +405,9 @@ class ClockCorrection():
 
         self.hdf_dump_file = hdf_dump_file
         self.plot_file = label + "_clock_adjustment.png"
-        self.clock_offset_table = read_clock_offset_table(clock_offset_table)
+        self.clock_offset_file = clock_offset_file
+        self.clock_offset_table = \
+            read_clock_offset_table(self.clock_offset_file)
 
         self.temperature_correction_data = \
             temperature_correction_table(
@@ -396,8 +423,12 @@ class ClockCorrection():
             try:
                 self.adjust_temperature_correction()
             except Exception:
-                log.warn("Temperature adjustment failed")
-
+                import traceback
+                logfile = 'adjust_temperature_error.log'
+                log.warn("Temperature adjustment failed. "
+                         "Full error stack in {logfile}")
+                with open(logfile, 'w') as fobj:
+                    traceback.print_last(file=logfile)
 
     def read_temptable(self, cache_temptable_name=None):
         if cache_temptable_name is not None and \
@@ -426,7 +457,7 @@ class ClockCorrection():
 
         start = mets[0]
         stop = mets[-1]
-        clock_offset_table = read_clock_offset_table()
+        clock_offset_table = read_clock_offset_table(self.clock_offset_file)
         clock_mets = clock_offset_table['met']
 
         jump_times = np.array([78708320, 79657575, 81043985, 82055671])
@@ -448,12 +479,14 @@ class ClockCorrection():
         clock_residuals = clock_offset_table['offset'] - \
                           table_new['temp_corr'][tempcorr_idx]
 
+        good = clock_residuals == clock_residuals
         if len(clock_offset_table['met']) > 100:
-            z = np.polyfit(clock_offset_table['met'], clock_residuals, 1)
+            z = np.polyfit(clock_offset_table['met'][good],
+                           clock_residuals[good], 1)
             p = np.poly1d(z)
         else:
-            fit_result = robust_linear_fit(clock_offset_table['met'],
-                                           clock_residuals)
+            fit_result = robust_linear_fit(clock_offset_table['met'][good],
+                                           clock_residuals[good])
             m, q = fit_result.estimator_.coef_, \
                    fit_result.estimator_.intercept_
 
@@ -491,21 +524,23 @@ class ClockCorrection():
         # better_points = np.abs(good_diffs - running_median) < 0.001
         mscuts = [-0.002, -0.001, -0.0006, -0.0004]
 
-        better_points = np.ones_like(good_diffs, dtype=bool)
+        better_points = np.array(good_diffs == good_diffs, dtype=bool)
+        good_diffs[~better_points] = 0
+
         for i, cut in enumerate(mscuts):
-            mm = median_filter(good_diffs[better_points], 15)
-            wh = ((good_diffs[better_points] - mm[better_points]) < mscuts[i]) | (
-                        (good_diffs[better_points] - mm[better_points]) < mscuts[
-                    0])
-            better_points[better_points][wh] = False
+            mm = median_filter(good_diffs, 15)
+            wh = ((good_diffs[better_points] - mm[better_points]) < mscuts[
+                i]) | ((good_diffs[better_points] - mm[better_points]) <
+                       mscuts[0])
+            better_points[better_points] = ~wh
 
         diff_trend = interp1d(good_clock_mets[better_points],
-                              savgol_filter(good_diffs[better_points], 15, 2),
+                              savgol_filter(good_diffs[better_points], 11, 2),
                               fill_value='extrapolate',
                               bounds_error=False, assume_sorted=True)
 
-        table_new['temp_corr_detrend'] = table_new['temp_corr'] + diff_trend(
-            table_new['met'])
+        table_new['temp_corr_detrend'] = \
+            table_new['temp_corr'] + diff_trend(table_new['met'])
 
         table_new['temp_corr'] = table_new['temp_corr_detrend']
         table_new.pop('temp_corr_detrend')
@@ -849,7 +884,7 @@ class NuSTARCorr():
                                                 adjust_absolute_timing=adjust,
                                                 force_divisor=force_divisor,
                                                 label=root, additional_days=2,
-                                                clock_offset_table=None,
+                                                clock_offset_file=None,
                                                 hdf_dump_file=hdf_dump_file)
         self.temperature_correction_fun = \
             self.clock_correction.temperature_correction_fun(adjust=adjust)
@@ -1161,7 +1196,7 @@ def main_create_clockfile(args=None):
 
     clockcorr = ClockCorrection(temperature_file=args.tempfile,
                                 adjust_absolute_timing=True,
-                                clock_offset_table=args.offsets,
+                                clock_offset_file=args.offsets,
                                 hdf_dump_file=args.cache,
                                 freqchange_file=args.frequency_changes)
     clockcorr.write_clock_file(args.outfile)
