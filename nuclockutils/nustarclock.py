@@ -259,6 +259,9 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
     temptable.remove_column('Time')
     temptable.rename_column('tp_eps_ceu_txco_tmp', 'temperature')
     temptable["temperature"] = np.array(temptable["temperature"], dtype=float)
+    if os.path.exists('tmp.csv'):
+        os.unlink('tmp.csv')
+
     return temptable
 
 
@@ -390,11 +393,15 @@ class ClockCorrection():
 
         if adjust_absolute_timing:
             log.info("Adjusting temperature correction")
-            self.adjust_temperature_correction()
+            try:
+                self.adjust_temperature_correction()
+            except Exception:
+                log.warn("Temperature adjustment failed")
 
 
-    def read_temptable(self, cache_temptable_name='temptable.hdf5'):
-        if os.path.exists(cache_temptable_name):
+    def read_temptable(self, cache_temptable_name=None):
+        if cache_temptable_name is not None and \
+                os.path.exists(cache_temptable_name):
             self.temptable = Table.read(cache_temptable_name, path='temptable')
         else:
             self.temptable = \
@@ -402,7 +409,8 @@ class ClockCorrection():
                                    mjdstart=self.mjdstart,
                                    mjdstop=self.mjdstop,
                                    dt=self.temperature_dt)
-            self.temptable.write(cache_temptable_name, path='temptable')
+            if cache_temptable_name is not None:
+                self.temptable.write(cache_temptable_name, path='temptable')
 
     def temperature_correction_fun(self, adjust=False):
         data = self.temperature_correction_data
@@ -431,12 +439,26 @@ class ClockCorrection():
                    clock_offset_table['offset'][clidx]
             table_new['temp_corr'][:idx] -= jump  # - corrjump
 
+        good = table_new['temp_corr'] == table_new['temp_corr']
+        table_new = table_new[good]
+
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
+
         clock_residuals = clock_offset_table['offset'] - \
                           table_new['temp_corr'][tempcorr_idx]
-        z = np.polyfit(clock_offset_table['met'], clock_residuals, 1)
-        p = np.poly1d(z)
+
+        if len(clock_offset_table['met']) > 100:
+            z = np.polyfit(clock_offset_table['met'], clock_residuals, 1)
+            p = np.poly1d(z)
+        else:
+            fit_result = robust_linear_fit(clock_offset_table['met'],
+                                           clock_residuals)
+            m, q = fit_result.estimator_.coef_, \
+                   fit_result.estimator_.intercept_
+
+            def p(times):
+                return times * m + q
 
         print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
 
@@ -1176,7 +1198,6 @@ def main_update_temptable(args=None):
     new_table = read_csv_temptable(temperature_file=args.tempfile,
                                    mjdstart=last_measurement)
 
-    new_table.write("new.csv")
     if last_measurement is not None:
         new_values = new_table['mjd'] > last_measurement
         if not np.any(new_values):
@@ -1185,6 +1206,11 @@ def main_update_temptable(args=None):
 
         log.info("Updating temperature table")
         new_table = vstack((existing_table, new_table[new_values]))
+
+    window = np.median(310 / np.diff(new_table['met']))
+    window = int(window // 2 * 2 + 1)
+    new_table['temperature_smooth'] = \
+        savgol_filter(new_table['temperature'], window, 2)
 
     log.info(f"Saving to {args.outfile}")
     new_table.write(args.outfile, path="temptable", overwrite=True)
