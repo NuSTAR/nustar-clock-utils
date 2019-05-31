@@ -808,7 +808,7 @@ def plot_scatter(new_clock_table, clock_offset_table):
     plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
         opts.Curve(color='k'))
 
-    return plot_1.opts(opts.Scatter(width=400, height=400)).opts(
+    return plot_1.opts(opts.Scatter(width=800, height=600)).opts(
         ylim=(-700, 700)) * plot_1b * plot_1a
 
 
