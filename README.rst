@@ -79,7 +79,8 @@ name and the coordinates.
 License
 -------
 
-This project is Copyright (c) Matteo Bachetti and licensed under
+This project is Copyright (c) Matteo Bachetti, Craig Markwardt and the NuSTAR team,
+and licensed under
 the terms of the BSD 3-Clause license. This package is based upon
 the `Astropy package template <https://github.com/astropy/package-template>`_
 which is licensed under the BSD 3-clause licence. See the licenses folder for
