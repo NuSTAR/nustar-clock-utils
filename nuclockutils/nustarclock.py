@@ -858,7 +858,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
 
     plot_0 = all_data.to.scatter('met', ['offset', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
-        color_index='station', alpha=0.5).overlay('station')
+        color_index='station', alpha=0.5, muted_line_alpha=0.1,
+        muted_fill_alpha=0.03).overlay('station')
     plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint))
     plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
@@ -877,13 +878,15 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                      ('utc', 'UT')])
     plot_1 = all_data_res.to.scatter('met', ['residual', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
-        color_index='station', alpha=0.5).overlay('station')
+        color_index='station', alpha=0.5, muted_line_alpha=0.1,
+        muted_fill_alpha=0.03).overlay('station')
     plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6}).opts(
         opts.Curve(color='k'))
     plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
         opts.Curve(color='k'))
 
-    plot_1_all = plot_1.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
+    plot_1_all = plot_1.opts(
+        opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-700, 700)) * plot_1b * plot_1a
 
     return hv.Layout(plot_0_all + plot_1_all).cols(1)
@@ -1291,3 +1294,25 @@ def main_update_temptable(args=None):
 
     log.info(f"Saving to {args.outfile}")
     new_table.write(args.outfile, path="temptable", overwrite=True)
+
+
+def main_plot_diagnostics(args=None):
+    import argparse
+    description = ('Plot diagnostic information about the newly produced '
+                   'clock file.')
+    parser = argparse.ArgumentParser(description=description)
+
+    parser.add_argument("clockcorr", type=str,
+                        help="Clock correction file")
+    parser.add_argument("clockoff", default=None,
+                        help="Clock offset table")
+
+    args = parser.parse_args(args)
+
+    clock_offset_table = read_clock_offset_table(args.clockoff)
+    plot = plot_scatter(Table.read(args.clockcorr, hdu="NU_FINE_CLOCK"),
+                        clock_offset_table)
+
+    outfig = args.clockcorr.replace(".gz", "").replace(".fits", "")
+    renderer = hv.renderer('bokeh')
+    renderer.save(plot, outfig)
