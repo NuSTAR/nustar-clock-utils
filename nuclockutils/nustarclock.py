@@ -634,8 +634,15 @@ class ClockCorrection():
         'BCF     ', "Dataset is a Basic Calibration File")
         header["CDTP0001"] = ('DATA    ', "Calibration file contains data")
         header["CCNM0001"] = ('FINECLOCK', "Type of calibration data")
-        header["TSTART"] = (tstart, "[s] Start time [MET]")
-        header["TSTOP"] = (tstop, "[s] Stop time [MET]")
+
+        header["CVSD0001"] = ('2010-01-01', "UCT date when file should first be used")
+        header["CVST0001"] = ('00:00:00', "UCT time when file should first be used")
+        
+        header["CVTD0001"] = (date, "Last UTC date when the file should be used (same as DATE)")
+        header["CVTT0001"] = (date, "Last UTC time when the file should be used")
+        
+        header["TSTART"] = (tstart, "[s] Start time [MET] of data in the offset file")
+        header["TSTOP"] = (tstop, "[s] Stop time [MET] of data in the offset file")
 
         comment = """NuSTAR fine clock correction file
 

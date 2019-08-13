@@ -9,6 +9,9 @@ __pycache__
 # add a non-generated .c extension, use `git add -f filename.c`.
 *.c
 
+# Local scripts
+local_scipts/*
+
 # Other generated files
 */version.py
 */cython_version.py
