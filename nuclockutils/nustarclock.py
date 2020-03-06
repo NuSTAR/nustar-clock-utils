@@ -848,7 +848,7 @@ def plot_scatter(new_clock_table, clock_offset_table):
                              'utc': dates.strftime("%Y:%m:%d"),
                              'offset': clock_offset_table['offset'][:-1],
                              'station': clock_offset_table['station'][:-1]})
-    all_data = hv.Dataset(all_data, [('met', 'Mission Elapsed Time'),
+    all_data = hv.Dataset(all_data, [('met', 'Mission Epoch Time'),
                                      ('station', 'Ground Station')],
                                     [('offset', 'Clock Offset (s)'),
                                      ('mjd', 'MJD'),
@@ -877,7 +877,12 @@ def plot_scatter(new_clock_table, clock_offset_table):
                              'utc': dates.strftime("%Y:%m:%d"),
                              'residual': clock_residuals_detrend * 1e6,
                              'station': clock_offset_table['station'][:-1]})
-    all_data_res = hv.Dataset(all_data_res, [('met', 'Mission Elapsed Time'),
+                             
+                             
+    # Jump in and save this to disk here:
+    all_data_res.to_pickle('all_data_res.pkl')
+    
+    all_data_res = hv.Dataset(all_data_res, [('met', 'Mission Epoch Time'),
                                      ('station', 'Ground Station')],
                                     [('residual', 'Residuals (us)'),
                                      ('mjd', 'MJD'),
@@ -895,6 +900,9 @@ def plot_scatter(new_clock_table, clock_offset_table):
     plot_1_all = plot_1.opts(
         opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-700, 700)) * plot_1b * plot_1a
+
+    rolling_data = pd.DataFrame({'met':control_points, 'rolling_std':rolling_std*1e6})
+    rolling_data.to_pickle('rolling_data.pkl')
 
     return hv.Layout(plot_0_all + plot_1_all).cols(1)
 
