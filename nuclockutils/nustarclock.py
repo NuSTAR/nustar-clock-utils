@@ -34,8 +34,9 @@ ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
 def get_rolling_std(clock_residuals_detrend,
                     clock_offset_table, window=20 * 86400):
     malindi_stn = clock_offset_table['station'] == 'MLD'
+    detrended_not_nan = clock_residuals_detrend == clock_residuals_detrend
     use_for_interpol = \
-        malindi_stn & ~clock_offset_table['flag']
+        malindi_stn & ~clock_offset_table['flag'] & detrended_not_nan
     overlap = 0.1
 
     clstart = clock_offset_table['met'][0]
