@@ -29,8 +29,6 @@ ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
                                dtype=np.longdouble)
 
 
-
-
 def get_rolling_std(clock_residuals_detrend,
                     clock_offset_table, window=20 * 86400):
     malindi_stn = clock_offset_table['station'] == 'MLD'
