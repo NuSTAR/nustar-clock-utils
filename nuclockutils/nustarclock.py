@@ -636,10 +636,10 @@ class ClockCorrection():
 
         header["CVSD0001"] = ('2010-01-01', "UCT date when file should first be used")
         header["CVST0001"] = ('00:00:00', "UCT time when file should first be used")
-        
+
         header["CVTD0001"] = (date, "Last UTC date when the file should be used (same as DATE)")
         header["CVTT0001"] = (date, "Last UTC time when the file should be used")
-        
+
         header["TSTART"] = (tstart, "[s] Start time [MET] of data in the offset file")
         header["TSTOP"] = (tstop, "[s] Stop time [MET] of data in the offset file")
 
@@ -876,11 +876,11 @@ def plot_scatter(new_clock_table, clock_offset_table):
                              'utc': dates.strftime("%Y:%m:%d"),
                              'residual': clock_residuals_detrend * 1e6,
                              'station': clock_offset_table['station'][:-1]})
-                             
-                             
+
+
     # Jump in and save this to disk here:
     all_data_res.to_pickle('all_data_res.pkl')
-    
+
     all_data_res = hv.Dataset(all_data_res, [('met', 'Mission Epoch Time'),
                                      ('station', 'Ground Station')],
                                     [('residual', 'Residuals (us)'),
@@ -903,7 +903,26 @@ def plot_scatter(new_clock_table, clock_offset_table):
     rolling_data = pd.DataFrame({'met':control_points, 'rolling_std':rolling_std*1e6})
     rolling_data.to_pickle('rolling_data.pkl')
 
-    return hv.Layout(plot_0_all + plot_1_all).cols(1)
+    text_top = hv.Div("""
+        <p>
+        Clock offsets measured at ground station passes throughout
+        the mission (scatter points), compared to the thermal model for clock 
+        delays (line). Different colors indicate different ground stations 
+        (MLD: Malindi; SNG: Singapore; UHI: US Hawaii). 
+        <p>Use the tools on the top right to zoom in the plot.</p>
+        """)
+
+    text_bottom = hv.Div("""
+        <p>
+        Residuals of the clock offsets with respect to the thermal model. 
+        The black lines indicate the local scatter, calculated over a time 
+        span of approximately 5 days. The largest spikes indicate pathological
+        intervals.</p>
+        <p>Use the tools on the top right to zoom in the plot.</p>
+        """)
+
+    return hv.Layout((plot_0_all + text_top) +
+                     (plot_1_all + text_bottom)).cols(2)
 
 
 def robust_linear_fit(x, y):
