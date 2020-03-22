@@ -11,7 +11,7 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
-from .utils import filter_with_region
+from .utils import filter_with_region, fix_byteorder
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -25,8 +25,6 @@ hv.extension('bokeh')
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
-ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
-                               dtype=np.longdouble)
 
 
 def get_rolling_std(clock_residuals_detrend,
@@ -144,6 +142,9 @@ def read_clock_offset_table(clockoffset_file=None):
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
     log.info("Flagging bad points...")
+    ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
+                                   dtype=np.longdouble)
+
     for b in ALL_BAD_POINTS:
         nearest = np.argmin(np.abs(clock_offset_table['met'] - b))
         if np.abs(clock_offset_table['met'][nearest] - b) < 1:
@@ -341,8 +342,9 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     elif ext in ['.hk', '.hk.gz']:
         temptable = read_fits_temptable(temperature_file)
     elif ext in ['.hdf5', '.h5']:
-        return read_saved_temptable(mjdstart, mjdstop,
-                                    temperature_file)
+        temptable = read_saved_temptable(mjdstart, mjdstop,
+                                         temperature_file)
+        temptable = fix_byteorder(temptable)
     else:
         raise ValueError('Unknown format for temperature file')
 
@@ -566,6 +568,7 @@ class ClockCorrection():
 
         clock_err_fun = interp1d(control_points, rolling_std, assume_sorted=True,
                                  bounds_error=False, fill_value='extrapolate')
+
         new_clock_table = Table({'TIME': table_new['met'],
                                  'CLOCK_OFF_CORR': -table_new['temp_corr'],
                                  'CLOCK_FREQ_CORR': np.gradient(
@@ -1114,7 +1117,8 @@ def temperature_correction_table(met_start, met_stop,
     import six
     if hdf_dump_file is not None and os.path.exists(hdf_dump_file):
         log.info(f"Reading cached data from file {hdf_dump_file}")
-        result_table = pd.read_hdf(hdf_dump_file, key='tempdata')
+
+        result_table = fix_byteorder(Table.read(hdf_dump_file))
         mets = np.array(result_table['met'])
         if (met_start > mets[10] or met_stop < mets[-20]) and (
                 met_stop - met_start < 3 * 365 * 86400):
@@ -1202,13 +1206,11 @@ def temperature_correction_table(met_start, met_stop,
     log.info("Interpolation done.")
     table = table[:firstidx]
 
-    data = table.to_pandas()
-
     if hdf_dump_file is not None:
         log.info(f"Saving intermediate data to {hdf_dump_file}...")
-        data.to_hdf(hdf_dump_file, key='tempdata')
+        table.write(hdf_dump_file)
         log.info(f"Done.")
-    return data
+    return table
 
 
 def main_tempcorr(args=None):
