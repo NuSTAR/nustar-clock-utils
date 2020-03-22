@@ -602,7 +602,6 @@ CACHE_CONFIG = {
 cache = Cache()
 cache.init_app(app.server, config=CACHE_CONFIG)
 
-
 @cache.memoize()
 def global_store(file):
     if not os.path.exists(file):
@@ -610,7 +609,6 @@ def global_store(file):
 
     log.info(f"Reading data from {file}")
     return pickle.load(open(file, 'rb'))
-
 
 styles = {
     'pre': {
