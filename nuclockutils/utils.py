@@ -5,6 +5,16 @@ from astropy import log
 NUSTAR_MJDREF = np.longdouble("55197.00076601852")
 
 
+def fix_byteorder(table):
+    import sys
+
+    sys_byteorder = ('>', '<')[sys.byteorder == 'little']
+    for col in table.colnames:
+        if table[col].dtype.byteorder not in ('=', sys_byteorder):
+            table[col] = table[col].byteswap().newbyteorder(sys_byteorder)
+    return table
+
+
 def sec_to_mjd(time, mjdref=NUSTAR_MJDREF, dtype=np.double):
     return np.array(np.asarray(time) / 86400 + mjdref, dtype=dtype)
 
