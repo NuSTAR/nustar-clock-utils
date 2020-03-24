@@ -11,7 +11,7 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
-from .utils import filter_with_region, fix_byteorder
+from .utils import filter_with_region, fix_byteorder, rolling_std
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -27,30 +27,125 @@ curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
 
 
-def get_rolling_std(clock_residuals_detrend,
-                    clock_offset_table, window=20 * 86400):
+def get_bad_points_db(db_file='BAD_POINTS_DB.dat'):
+    if not os.path.exists(db_file):
+        db_file = os.path.join(datadir, 'BAD_POINTS_DB.dat')
+
+    return np.genfromtxt(db_file, dtype=np.longdouble)
+
+
+def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
+    if not os.path.exists(db_file):
+        return all_data
+
+    ALL_BAD_POINTS = np.genfromtxt(db_file)
+    ALL_BAD_POINTS.sort()
+    ALL_BAD_POINTS = np.unique(ALL_BAD_POINTS)
+    idxs = all_data['met'].searchsorted(ALL_BAD_POINTS)
+
+    mask = np.array(all_data['flag'], dtype=bool)
+
+    for idx in idxs:
+        if idx >= mask.size:
+            continue
+        mask[idx] = True
+    all_data['flag'] = mask
+    return all_data
+
+
+def find_good_time_intervals(temperature_table,
+                             clock_offset_table,
+                             clock_jump_times):
+    start_time = temperature_table['met'][0]
+    stop_time = temperature_table['met'][-1]
+    clock_gtis = []
+    current_start = start_time
+    for jump in clock_jump_times:
+        # To avoid that the gtis get fused, I subtract 1 ms
+        # from GTI stop
+        clock_gtis.append([current_start, jump - 1e-3])
+        current_start = jump
+    clock_gtis.append([current_start, stop_time])
+    clock_gtis = np.array(clock_gtis)
+
+    temp_condition = np.concatenate(
+        ([False], np.diff(temperature_table['met']) > 600, [False]))
+
+    temp_edges_l = np.concatenate((
+        [temperature_table['met'][0]], temperature_table['met'][temp_condition[:-1]]))
+
+    temp_edges_h = np.concatenate((
+        [temperature_table['met'][temp_condition[1:]], [temperature_table['met'][-1]]]))
+
+    temp_gtis = np.array(list(zip(
+        temp_edges_l, temp_edges_h)))
+
+    for t in temp_gtis:
+        print(t[0], t[1], t[1] - t[0])
+
+    gtis = cross_two_gtis(temp_gtis, clock_gtis)
+
+    return gtis
+
+
+def residual_roll_std(residuals, window=20):
+    """
+
+    Examples
+    --------
+    >>> residuals = np.zeros(5000)
+    >>> residuals[:4000] = np.random.normal(0, 1, 4000)
+    >>> roll_std = residual_roll_std(residuals, window=500)
+    >>> np.allclose(roll_std[:3500], 1., rtol=0.2)
+    True
+    >>> np.all(roll_std[4500:] == 0.)
+    True
+    """
+    r_std = rolling_std(np.diff(residuals), window) / np.sqrt(2)
+    return np.concatenate(([r_std[:1], r_std]))
+
+
+def get_malindi_data_except_when_out(clock_offset_table):
+    """Select offset measurements from Malindi, unless Malindi is out.
+
+    In the time interval between METs 93681591 and 98051312, Malindi was out
+    of work. For that time interval, we use all clock offset measurements
+    available. In all other cases, we just use Malindi
+
+    Parameters
+    ----------
+    clock_offset_table : :class:`Table` object
+        Table containing the clock offset measurements. At least, it has to
+        contain a 'met' and a 'station' columns.
+
+    Returns
+    -------
+    use_for_interpol : array of ``bool``
+        Mask of "trustworthy" time measurements
+    bad_malindi_time : array of ``bool``
+        Mask of time measurements during Malindi outage
+
+    Example
+    -------
+    >>> clocktable = Table({'met': [93681592, 1e8, 1.5e8],
+    ...                     'station': ['SNG', 'MLD', 'UHI']})
+    >>> ufp, bmt = get_malindi_data_except_when_out(clocktable)
+    >>> assert np.all(ufp == [True, True, False])
+    >>> assert np.all(bmt == [True, False, False])
+    """
+    no_malindi_intvs = [[93681591, 98051312]]
+    clock_mets = clock_offset_table['met']
+
+    bad_malindi_time = np.zeros(len(clock_mets), dtype=bool)
+    for nmi in no_malindi_intvs:
+        bad_malindi_time = bad_malindi_time | (clock_mets >= nmi[0]) & (
+                    clock_mets < nmi[1])
+
     malindi_stn = clock_offset_table['station'] == 'MLD'
-    detrended_not_nan = clock_residuals_detrend == clock_residuals_detrend
     use_for_interpol = \
-        malindi_stn & ~clock_offset_table['flag'] & detrended_not_nan
-    overlap = 0.1
+        (malindi_stn | bad_malindi_time)
 
-    clstart = clock_offset_table['met'][0]
-    clstop = clock_offset_table['met'][-1]
-
-    control_points = np.arange(clstart, clstop + window, window * overlap)
-    rolling_std = np.zeros_like(control_points)
-
-    times_to_search = clock_offset_table['met'][use_for_interpol]
-    res_to_search = clock_residuals_detrend[use_for_interpol]
-
-    for i, t in enumerate(control_points):
-        s, e = t - window / 2, t + window / 2
-        s_idx, e_idx = np.searchsorted(times_to_search, s), \
-                       np.searchsorted(times_to_search, e)
-        rolling_std[i] = mad(res_to_search[s_idx:e_idx])
-    return control_points, rolling_std
-
+    return use_for_interpol, bad_malindi_time
 
 
 def _look_for_temptable():
@@ -142,8 +237,7 @@ def read_clock_offset_table(clockoffset_file=None):
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
     log.info("Flagging bad points...")
-    ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
-                                   dtype=np.longdouble)
+    ALL_BAD_POINTS = get_bad_points_db()
 
     for b in ALL_BAD_POINTS:
         nearest = np.argmin(np.abs(clock_offset_table['met'] - b))
@@ -168,7 +262,8 @@ FREQ_CHANGE_DB= {"delete": [77509247, 78720802],
 
 
 def read_freq_changes_table(freqchange_file=None, filter_bad=True):
-    """
+    """Read the table with the list of commanded divisor frequencies.
+
     Parameters
     ----------
     freqchange_file : str
@@ -474,6 +569,9 @@ class ClockCorrection():
         good = table_new['temp_corr'] == table_new['temp_corr']
         table_new = table_new[good]
 
+        good = clock_offset_table['met'] < table_new['met'][-1]
+        clock_offset_table = clock_offset_table[good]
+
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
 
@@ -563,10 +661,10 @@ class ClockCorrection():
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
 
-        control_points, rolling_std = get_rolling_std(clock_residuals_detrend,
-                                                      clock_offset_table)
+        roll_std = rolling_std(clock_residuals_detrend, 20)
 
-        clock_err_fun = interp1d(control_points, rolling_std, assume_sorted=True,
+        clock_err_fun = interp1d(clock_offset_table['met'], roll_std,
+                                 assume_sorted=True,
                                  bounds_error=False, fill_value='extrapolate')
 
         new_clock_table = Table({'TIME': table_new['met'],
@@ -838,9 +936,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
     clock_mjds = clock_offset_table['mjd']
     clock_residuals_detrend = clock_offset_table['offset'][:-1] - yint
 
-    control_points, rolling_std = \
-        get_rolling_std(clock_residuals_detrend, clock_offset_table[:-1],
-                        window=5 * 86400)
+    roll_std = rolling_std(clock_residuals_detrend, 20)
+    control_points = clock_offset_table['met']
 
     dates = Time(clock_mjds[:-1], format='mjd')
 
@@ -894,9 +991,9 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6}).opts(
+    plot_1b = hv.Curve({'x': control_points, 'y': roll_std * 1e6}).opts(
         opts.Curve(color='k'))
-    plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
+    plot_1a = hv.Curve({'x': control_points, 'y': -roll_std * 1e6}).opts(
         opts.Curve(color='k'))
 
     plot_1_all = plot_1.opts(
