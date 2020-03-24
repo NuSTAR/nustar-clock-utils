@@ -12,6 +12,7 @@ from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
 from .utils import filter_with_region, fix_byteorder, rolling_std
+from .utils import robust_linear_fit, cross_two_gtis
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -43,7 +44,10 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     ALL_BAD_POINTS = np.unique(ALL_BAD_POINTS)
     idxs = all_data['met'].searchsorted(ALL_BAD_POINTS)
 
-    mask = np.array(all_data['flag'], dtype=bool)
+    if 'flag' in all_data.colnames:
+        mask = np.array(all_data['flag'], dtype=bool)
+    else:
+        mask = np.zeros(len(all_data), dtype=bool)
 
     for idx in idxs:
         if idx >= mask.size:
@@ -1023,15 +1027,6 @@ def plot_scatter(new_clock_table, clock_offset_table):
 
     return hv.Layout((plot_0_all + text_top) +
                      (plot_1_all + text_bottom)).cols(2)
-
-
-def robust_linear_fit(x, y):
-    from sklearn import linear_model
-    X = x.reshape(-1, 1)
-    # # Robustly fit linear model with RANSAC algorithm
-    ransac = linear_model.RANSACRegressor(residual_threshold=0.0002)
-    ransac.fit(X, y)
-    return ransac
 
 
 class NuSTARCorr():

@@ -1,4 +1,5 @@
 import numpy as np
+import copy
 from astropy import log
 from astropy.table import Table
 from astroquery.heasarc import Heasarc
@@ -362,3 +363,140 @@ def cross_two_gtis(gti0, gti1):
         gti1 = gti1[gti1[:, 1] > gti_end]
 
     return np.array(final_gti)
+
+
+def robust_linear_fit(x, y):
+    from sklearn import linear_model
+    X = x.reshape(-1, 1)
+    # # Robustly fit linear model with RANSAC algorithm
+    ransac = linear_model.RANSACRegressor(residual_threshold=0.0002)
+    ransac.fit(X, y)
+    return ransac
+
+
+def measure_overall_trend(x, y, ref_size=200):
+    """
+
+    Examples
+    --------
+    >>> val = measure_overall_trend(np.asarray([0]), np.asarray([1]))
+    >>> val[0] is None
+    True
+    >>> val = measure_overall_trend(np.asarray([0, 1]), np.asarray([1, 1]))
+    >>> np.allclose(val, [0, 0, 1])
+    True
+    >>> val = measure_overall_trend(np.arange(1000), np.ones(1000))
+    >>> np.allclose(val, [0, 0, 1])
+    True
+    """
+    x0 = x[0]
+    x = x - x0
+
+    if x.size <= 1:
+        return None, None, None
+    elif x.size > ref_size:
+        window = ref_size // 4
+
+        mets = [np.mean(x[:window]), np.mean(x[-window:])]
+
+        res = [np.median(y[:window]), np.median(y[-window:])]
+
+        m = (res[1] - res[0]) / (mets[1] - mets[0])
+        q = res[0]
+    else:
+        fit_result = robust_linear_fit(x, y)
+        m, q = fit_result.estimator_.coef_[0], \
+        fit_result.estimator_.intercept_
+
+    return x0, m, q
+
+
+def get_rough_trend_fun(met, residuals):
+    """
+
+    Examples
+    --------
+    >>> fun = get_rough_trend_fun(np.asarray([0]), np.asarray([1]))
+    >>> fun is None
+    True
+    >>> x, y = np.asarray([0, 1]), np.asarray([1, 1])
+    >>> fun = get_rough_trend_fun(x, y)
+    >>> np.allclose(fun(x), y)
+    True
+    >>> x, y = np.arange(1000), np.ones(1000)
+    >>> fun = get_rough_trend_fun(x, y)
+    >>> np.allclose(fun(x), y)
+    True
+    """
+    x0, m, q = measure_overall_trend(met, residuals)
+
+    if m is None:
+        return None
+
+    def p(times):
+        return (times - x0) * m + q
+
+    return p
+
+
+def merge_and_sort_arrays(array1, array2):
+    """Merge and sort two arrays
+
+    Examples
+    --------
+    >>> arr1 = np.array([0, 3., 1])
+    >>> arr2 = np.array([2, 0])
+    >>> np.allclose(merge_and_sort_arrays(arr1, arr2), [0, 1, 2, 3])
+    True
+    """
+    arr = np.concatenate((array1, array2))
+    arr.sort()
+    return np.unique(arr)
+
+
+def eliminate_array_from_array(array1, array2):
+    """Eliminate points from an array.
+
+    Returns a sorted version of ``array1``, without the elements of ``array2``
+
+    Examples
+    --------
+    >>> arr1 = np.array([0, 3., 1])
+    >>> arr2 = np.array([4, 0])
+    >>> np.allclose(eliminate_array_from_array(arr1, arr2), [1, 3])
+    True
+    """
+    array1 = np.asarray(copy.deepcopy(array1))
+    array2 = np.asarray(copy.deepcopy(array2))
+    array1.sort()
+    array2 = array2[array2 <= array1[-1]]
+    idx = np.searchsorted(array1, array2)
+    idx = idx[idx < array1.size]
+    # If the number is not in the array, do not eliminate!
+    good = np.isclose(array1[idx], array2)
+    return np.delete(array1, idx[good])
+
+
+def find_idxs(array, min, max):
+    imin, imax = np.searchsorted(array, [min, max])
+    return slice(imin, imax)
+
+
+def filter_dict_with_re(dictionary, regex):
+    """
+
+    Examples
+    --------
+    >>> relayoutData = {'xaxis.showspikes': False, 'xaxis2.range[0]': False}
+    >>> regex = rangevals_re = r'^[xy].*\.range.*$'
+    >>> newdict = filter_dict_with_re(relayoutData, regex)
+    >>> newdict['xaxis2.range[0]']
+    False
+    """
+    import re
+    new_dict ={}
+    re = re.compile(regex)
+    for key, val in dictionary.items():
+        if re.match(key):
+            new_dict[key] = val
+    return new_dict
