@@ -265,6 +265,62 @@ FREQ_CHANGE_DB= {"delete": [77509247, 78720802],
                          (1174759273, 228420058, 24000334)]}
 
 
+def no_jump_gtis(start_time, stop_time, clock_jump_times=None):
+    """
+    Examples
+    --------
+    >>> gtis = no_jump_gtis(0, 3, [1, 1.1])
+    >>> np.allclose(gtis, [[0, 1], [1, 1.1], [1.1, 3]])
+    True
+    >>> gtis = no_jump_gtis(0, 3)
+    >>> np.allclose(gtis, [[0, 3]])
+    True
+    """
+    if clock_jump_times is None:
+        return [[start_time, stop_time]]
+
+    clock_gtis = []
+    current_start = start_time
+    for jump in clock_jump_times:
+        clock_gtis.append([current_start, jump])
+        current_start = jump
+    clock_gtis.append([current_start, stop_time])
+    clock_gtis = np.array(clock_gtis)
+    return clock_gtis
+
+
+def temperature_gtis(temperature_table, max_distance=600):
+    """
+
+    Examples
+    --------
+    >>> temperature_table = Table({'met': [0, 1, 2, 10, 11, 12]})
+    >>> gti = temperature_gtis(temperature_table, 5)
+    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    True
+    >>> temperature_table = Table({'met': [-10, 0, 1, 2, 10, 11, 12, 20]})
+    >>> gti = temperature_gtis(temperature_table, 5)
+    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    True
+    """
+    temp_condition = np.concatenate(
+        ([False], np.diff(temperature_table['met']) > max_distance, [False]))
+
+    temp_edges_l = np.concatenate((
+        [temperature_table['met'][0]],
+        temperature_table['met'][temp_condition[:-1]]))
+
+    temp_edges_h = np.concatenate((
+        [temperature_table['met'][temp_condition[1:]],
+         [temperature_table['met'][-1]]]))
+
+    temp_gtis = np.array(list(zip(
+        temp_edges_l, temp_edges_h)))
+
+    length = temp_gtis[:, 1] - temp_gtis[:, 0]
+    return temp_gtis[length > 0]
+
+
 def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     """Read the table with the list of commanded divisor frequencies.
 
