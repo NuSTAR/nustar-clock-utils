@@ -3,6 +3,7 @@ import copy
 from astropy import log
 from astropy.table import Table
 from astroquery.heasarc import Heasarc
+from astropy.time import Time
 from scipy.interpolate import LSQUnivariateSpline
 
 
@@ -151,8 +152,14 @@ def get_obsid_list_from_heasarc(cache_file='heasarc.hdf5'):
     for field in 'OBSID,NAME,OBSERVATION_MODE,OBS_TYPE'.split(','):
         all_nustar_obs[field] = [om.strip() for om in all_nustar_obs[field]]
 
+    print(all_nustar_obs['TIME'])
+    mjds = Time(np.array(all_nustar_obs['TIME']), format='mjd')
+    mjd_ends = Time(np.array(all_nustar_obs['END_TIME']), format='mjd')
+
     # all_nustar_obs = all_nustar_obs[all_nustar_obs["OBSERVATION_MODE"] == 'SCIENCE']
     all_nustar_obs['MET'] = np.array(all_nustar_obs['TIME'] - NUSTAR_MJDREF) * 86400
+    all_nustar_obs['DATE'] = mjds.fits
+    all_nustar_obs['DATE-END'] = mjd_ends.fits
 
     return all_nustar_obs
 
@@ -235,7 +242,8 @@ def rolling_std(a, window, pad='center'):
     return rolling_stat(np.std, a, window, pad, axis=-1)
 
 
-def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.0001):
+def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.0001,
+                        downsample=5):
     """Pass a spline through the data
 
     Examples
@@ -250,7 +258,7 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.0001):
 
     control_points = \
         np.linspace(lo_lim + 2 * grace_intv, hi_lim - 2 * grace_intv,
-                    x.size // 5)
+                    x.size // downsample)
 
     detrend_fun = LSQUnivariateSpline(
         x, y, t=control_points, k=k,
