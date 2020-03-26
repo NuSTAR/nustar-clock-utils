@@ -1547,8 +1547,12 @@ def main_update_temptable(args=None):
     new_table['temperature_smooth'] = \
         savgol_filter(new_table['temperature'], window, 2)
 
-    log.info(f"Saving to {args.outfile}")
-    new_table.write(args.outfile, path="temptable", overwrite=True)
+    outfile = args.outfile
+    if args.outfile is None:
+        outfile = os.path.splitext(args.tempfile)[0] + '.hdf5'
+
+    log.info(f"Saving to {outfile}")
+    new_table.write(outfile, path="temptable", overwrite=True)
 
 
 def main_plot_diagnostics(args=None):
