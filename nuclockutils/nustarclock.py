@@ -46,6 +46,7 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     >>> np.savetxt(db_file, np.array([-1, 3, 10]))
     >>> all_data = Table({'met': [0, 1, 2, 3, 4]})
     >>> all_data = flag_bad_points(all_data, db_file='dummy_bad_points.dat')
+    INFO: ...
     >>> np.all(all_data['flag'] == [False, False, False, True, False])
     True
     """
@@ -132,8 +133,8 @@ def spline_detrending(clock_offset_table, temptable):
     return temptable
 
 
-def eliminate_major_trends_in_residuals(temp_table, clock_offset_table,
-                                        gtis, debug=False):
+def eliminate_trends_in_residuals(temp_table, clock_offset_table,
+                                  gtis, debug=False):
 
     good = clock_offset_table['met'] < np.max(temp_table['met'])
     clock_offset_table = clock_offset_table[good]
@@ -728,6 +729,11 @@ class ClockCorrection():
         self.clock_offset_table = \
             read_clock_offset_table(self.clock_offset_file)
 
+        self.clock_jump_times = \
+            np.array([78708320, 79657575, 81043985, 82055671, 293346772])
+        self.gtis = find_good_time_intervals(
+            self.temptable, self.clock_jump_times)
+
         self.temperature_correction_data = \
             temperature_correction_table(
                 self.met_start, self.met_stop,
@@ -769,104 +775,11 @@ class ClockCorrection():
                         fill_value="extrapolate", bounds_error=False)
 
     def adjust_temperature_correction(self):
-        import copy
-        table = self.temperature_correction_data
-        table_new = copy.deepcopy(table)
-        mets = np.array(table_new['met'])
-
-        start = mets[0]
-        stop = mets[-1]
-        clock_offset_table = read_clock_offset_table(self.clock_offset_file)
-        clock_mets = clock_offset_table['met']
-
-        jump_times = np.array([78708320, 79657575, 81043985, 82055671])
-        jump_times = jump_times[(jump_times >= start) & (jump_times < stop)]
-        jumpidx = np.searchsorted(table_new['met'], jump_times)
-        cljumpidx = np.searchsorted(clock_offset_table['met'], jump_times)
-
-        for clidx, idx in zip(cljumpidx, jumpidx):
-            jump = clock_offset_table['offset'][clidx + 1] - \
-                   clock_offset_table['offset'][clidx]
-            table_new['temp_corr'][:idx] -= jump  # - corrjump
-
-        good = table_new['temp_corr'] == table_new['temp_corr']
-        table_new = table_new[good]
-
-        good = clock_offset_table['met'] < table_new['met'][-1]
-        clock_offset_table = clock_offset_table[good]
-
-        tempcorr_idx = np.searchsorted(table_new['met'],
-                                       clock_offset_table['met'])
-
-        clock_residuals = clock_offset_table['offset'] - \
-                          table_new['temp_corr'][tempcorr_idx]
-
-        good = clock_residuals == clock_residuals
-        if len(clock_offset_table['met']) > 100:
-            z = np.polyfit(clock_offset_table['met'][good],
-                           clock_residuals[good], 1)
-            p = np.poly1d(z)
-        else:
-            fit_result = robust_linear_fit(clock_offset_table['met'][good],
-                                           clock_residuals[good])
-            m, q = fit_result.estimator_.coef_, \
-                   fit_result.estimator_.intercept_
-
-            def p(times):
-                return times * m + q
-
-        print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
-
-        table_new['temp_corr'] += p(table_new['met'])
-
-        clock_residuals = clock_offset_table['offset'] - \
-                          table_new['temp_corr'][tempcorr_idx]
-
-        smooth = median_filter(clock_residuals, 21)
-        diffs = clock_residuals - smooth
-        surelybad = np.logical_or(diffs < -50, diffs > 80)
-        no_malindi_intvs = [[93681591, 98051312]]
-        bad_malindi_time = np.zeros(len(clock_mets), dtype=bool)
-        for nmi in no_malindi_intvs:
-            bad_malindi_time = bad_malindi_time | (clock_mets >= nmi[0]) & (
-                        clock_mets < nmi[1])
-
-        # For bad Malindi Times, we use clock offsets minus half a millisecond
-        clock_offset_table[bad_malindi_time]['offset'] -= 0.0005
-
-        malindi_stn = clock_offset_table['station'] == 'MLD'
-        use_for_interpol = \
-            (malindi_stn | bad_malindi_time) & ~clock_offset_table[
-                'flag'] & ~surelybad
-
-        good_clock_mets = clock_mets[use_for_interpol]
-        good_diffs = clock_residuals[use_for_interpol]
-
-        # running_median = median_filter(good_diffs, 11)
-        # better_points = np.abs(good_diffs - running_median) < 0.001
-        mscuts = [-0.002, -0.001, -0.0006, -0.0004]
-
-        better_points = np.array(good_diffs == good_diffs, dtype=bool)
-        good_diffs[~better_points] = 0
-
-        for i, cut in enumerate(mscuts):
-            mm = median_filter(good_diffs, 15)
-            wh = ((good_diffs[better_points] - mm[better_points]) < mscuts[
-                i]) | ((good_diffs[better_points] - mm[better_points]) <
-                       mscuts[0])
-            better_points[better_points] = ~wh
-
-        diff_trend = interp1d(good_clock_mets[better_points],
-                              savgol_filter(good_diffs[better_points], 11, 2),
-                              fill_value='extrapolate',
-                              bounds_error=False, assume_sorted=True)
-
-        table_new['temp_corr_detrend'] = \
-            table_new['temp_corr'] + diff_trend(table_new['met'])
-
+        table_new = eliminate_trends_in_residuals(
+            self.temperature_correction_data,
+            load_clock_offset_table(self.clock_offset_file), gtis, debug=False)
         table_new['temp_corr'] = table_new['temp_corr_detrend']
         table_new.pop('temp_corr_detrend')
-
         self.temperature_correction_data = table_new
 
     def write_clock_file(self, filename=None):
@@ -1384,7 +1297,6 @@ def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
                       debug=False, craig_fit=False,
                       time_resolution=10):
-    from scipy.integrate import cumtrapz
     table_times = temptable['met']
 
     if met_start is None:
@@ -1410,10 +1322,7 @@ def temperature_delay(temptable, divisor,
 
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
 
-    # delay = cumtrapz(clock_rate_corr, times_fine, initial=0)
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
-    #     print(np.max(np.abs(delay - delay_sim)))
-    #     delay = np.cumsum(dt * clock_rate_corr)
     return interp1d(times_fine, delay_sim, fill_value='extrapolate',
                     bounds_error=False)
 
@@ -1615,7 +1524,7 @@ def main_update_temptable(args=None):
 
     last_measurement = None
     existing_table = None
-    if os.path.exists(args.outfile):
+    if args.outfile is not None and os.path.exists(args.outfile):
         log.info("Reading existing temperature table")
         existing_table = Table.read(args.outfile)
         last_measurement = existing_table['mjd'][-1] + 0.001 / 86400
