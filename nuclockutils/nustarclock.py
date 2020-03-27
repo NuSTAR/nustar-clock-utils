@@ -84,7 +84,10 @@ def find_good_time_intervals(temperature_table,
     clock_gtis = no_jump_gtis(
         start_time, stop_time, clock_jump_times)
 
-    temp_gtis = temperature_gtis(temperature_table)
+    if not 'gti' in temperature_table.meta:
+        temp_gtis = temperature_gtis(temperature_table)
+    else:
+        temp_gtis = temperature_table.meta['gti']
 
     gtis = cross_two_gtis(temp_gtis, clock_gtis)
 
@@ -227,7 +230,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
     return table_new
 
 
-def residual_roll_std(residuals, window=20):
+def residual_roll_std(residuals, window=15):
     """
 
     Examples
@@ -622,7 +625,7 @@ def interpolate_temptable(temptable, dt=10):
 
 
 def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
-                   dt=None):
+                   dt=None, gti_tolerance=600):
     if temperature_file is None:
         temperature_file = _look_for_temptable()
     log.info(f"Reading temperature_information from {temperature_file}")
@@ -638,12 +641,14 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     else:
         raise ValueError('Unknown format for temperature file')
 
+    temp_gtis = temperature_gtis(temptable, gti_tolerance)
     if dt is not None:
         temptable = interpolate_temptable(temptable, dt)
     else:
         good = np.diff(temptable['met']) > 0
         good = np.concatenate((good, [True]))
         temptable = temptable[good]
+    temptable.meta['gti'] = temp_gtis
 
     window = np.median(310 / np.diff(temptable['met']))
     window = int(window // 2 * 2 + 1)
@@ -777,9 +782,12 @@ class ClockCorrection():
     def adjust_temperature_correction(self):
         table_new = eliminate_trends_in_residuals(
             self.temperature_correction_data,
-            load_clock_offset_table(self.clock_offset_file), gtis, debug=False)
+            load_clock_offset_table(self.clock_offset_file), self.gtis,
+            debug=False)
         table_new['temp_corr'] = table_new['temp_corr_detrend']
-        table_new.pop('temp_corr_detrend')
+        table_new.remove_column('temp_corr_detrend')
+
+        # 'temp_corr_detrend']
         self.temperature_correction_data = table_new
 
     def write_clock_file(self, filename=None):
@@ -788,8 +796,10 @@ class ClockCorrection():
 
         if filename is None:
             filename = 'new_clock_file.fits'
-        clock_offset_table = self.clock_offset_table
         table_new = self.temperature_correction_data
+        clock_offset_table = self.clock_offset_table
+        clock_offset_table = clock_offset_table[
+            clock_offset_table['met'] < table_new['met'][-1]]
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
@@ -797,9 +807,12 @@ class ClockCorrection():
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
 
-        roll_std = rolling_std(clock_residuals_detrend, 20)
+        good, _ = get_malindi_data_except_when_out(clock_offset_table) & ~clock_offset_table['flag']
 
-        clock_err_fun = interp1d(clock_offset_table['met'], roll_std,
+        # print(clock_residuals_detrend, clock_residuals_detrend.size)
+        roll_std = residual_roll_std(clock_residuals_detrend[good])
+        control_points = clock_offset_table['met'][good]
+        clock_err_fun = interp1d(control_points, roll_std,
                                  assume_sorted=True,
                                  bounds_error=False, fill_value='extrapolate')
 
@@ -1060,6 +1073,7 @@ def calculate_clock_function(new_clock_table, clock_offset_table):
 
     #     /* Perform cubic interpolation */
     yint = -a + dx * (b + dx * (c + dx * d))
+
     return yint, good_mets
 
 
@@ -1067,22 +1081,25 @@ def plot_scatter(new_clock_table, clock_offset_table):
     from bokeh.models import HoverTool
     yint, good_mets = calculate_clock_function(new_clock_table,
                                                clock_offset_table)
-    clock_offset_table = clock_offset_table[good_mets]
+
+    clock_offset_table = clock_offset_table[good_mets][:-1]
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
-    clock_residuals_detrend = clock_offset_table['offset'][:-1] - yint
+    clock_residuals_detrend = clock_offset_table['offset'] - yint
 
-    roll_std = rolling_std(clock_residuals_detrend, 20)
-    control_points = clock_offset_table['met']
+    good, _ = get_malindi_data_except_when_out(clock_offset_table) & ~clock_offset_table['flag']
 
-    dates = Time(clock_mjds[:-1], format='mjd')
+    roll_std = residual_roll_std(clock_residuals_detrend[good])
+    control_points = clock_offset_table['met'][good]
 
-    all_data = pd.DataFrame({'met': clock_mets[:-1],
-                             'mjd': np.array(clock_mjds[:-1], dtype=int),
+    dates = Time(clock_mjds, format='mjd')
+
+    all_data = pd.DataFrame({'met': clock_mets,
+                             'mjd': np.array(clock_mjds, dtype=int),
                              'doy': dates.strftime("%Y:%j"),
                              'utc': dates.strftime("%Y:%m:%d"),
-                             'offset': clock_offset_table['offset'][:-1],
-                             'station': clock_offset_table['station'][:-1]})
+                             'offset': clock_offset_table['offset'],
+                             'station': clock_offset_table['station']})
     all_data = hv.Dataset(all_data, [('met', 'Mission Epoch Time'),
                                      ('station', 'Ground Station')],
                                     [('offset', 'Clock Offset (s)'),
@@ -1102,17 +1119,16 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint))
+    plot_0a = hv.Curve(dict(x=clock_mets, y=yint))
     plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
 
-    all_data_res = pd.DataFrame({'met': clock_mets[:-1],
-                             'mjd': np.array(clock_mjds[:-1], dtype=int),
+    all_data_res = pd.DataFrame({'met': clock_mets,
+                             'mjd': np.array(clock_mjds, dtype=int),
                              'doy': dates.strftime("%Y:%j"),
                              'utc': dates.strftime("%Y:%m:%d"),
                              'residual': clock_residuals_detrend * 1e6,
-                             'station': clock_offset_table['station'][:-1]})
-
+                             'station': clock_offset_table['station']})
 
     # Jump in and save this to disk here:
     all_data_res.to_pickle('all_data_res.pkl')
@@ -1136,7 +1152,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
         opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-700, 700)) * plot_1b * plot_1a
 
-    rolling_data = pd.DataFrame({'met':control_points, 'rolling_std':rolling_std*1e6})
+    rolling_data = pd.DataFrame({'met':control_points,
+                                 'rolling_std':roll_std*1e6})
     rolling_data.to_pickle('rolling_data.pkl')
 
     text_top = hv.Div("""
