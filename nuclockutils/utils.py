@@ -152,7 +152,6 @@ def get_obsid_list_from_heasarc(cache_file='heasarc.hdf5'):
     for field in 'OBSID,NAME,OBSERVATION_MODE,OBS_TYPE'.split(','):
         all_nustar_obs[field] = [om.strip() for om in all_nustar_obs[field]]
 
-    print(all_nustar_obs['TIME'])
     mjds = Time(np.array(all_nustar_obs['TIME']), format='mjd')
     mjd_ends = Time(np.array(all_nustar_obs['END_TIME']), format='mjd')
 

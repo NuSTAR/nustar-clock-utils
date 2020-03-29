@@ -157,12 +157,21 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
     fig = make_subplots(3, 1, shared_xaxes=True, vertical_spacing=0.02)
     fig.append_trace(go.Scattergl({
         'x': table_new['met'],
+        'y': table_new['temp_corr_raw'] * 1e3,
+        'hovertemplate': hovertemplate,
+        'text': all_nustar_obs_reindex['text'],
+        'mode': 'lines',
+        'name': f'Temperature correction raw',
+        'marker': {'color': 'grey', 'opacity': 0.5}
+    }), 1, 1)
+    fig.append_trace(go.Scattergl({
+        'x': table_new['met'],
         'y': table_new['temp_corr'] * 1e3,
         'hovertemplate': hovertemplate,
         'text': all_nustar_obs_reindex['text'],
         'mode': 'lines',
         'name': f'Temperature correction',
-        'marker': {'color': 'grey'}
+        'marker': {'color': 'black'}
     }), 1, 1)
     fig.append_trace(go.Scattergl({
         'x': table_new['met'],
@@ -171,7 +180,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
         'text': all_nustar_obs_reindex['text'],
         'mode': 'lines',
         'showlegend': False,
-        'marker': {'color':'grey'}
+        'marker': {'color':'black'}
     }), 2, 1)
     for sign in [-1, 1]:
         fig.append_trace(go.Scattergl({

@@ -115,9 +115,22 @@ def load_and_flag_clock_table(clockfile="latest_clock.dat"):
     return clock_offset_table
 
 
-def spline_detrending(clock_offset_table, temptable):
+def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
     tempcorr_idx = np.searchsorted(temptable['met'], clock_offset_table['met'])
     clock_residuals = np.array(clock_offset_table['offset'] - temptable['temp_corr'][tempcorr_idx])
+
+    if outlier_cuts is not None:
+        log.info("Cutting outliers...")
+        better_points = np.array(clock_residuals == clock_residuals, dtype=bool)
+
+        for i, cut in enumerate(outlier_cuts):
+            mm = median_filter(clock_residuals, 15)
+            wh = ((clock_residuals[better_points] - mm[better_points]) < outlier_cuts[
+                i]) | ((clock_residuals[better_points] - mm[better_points]) <
+                       outlier_cuts[0])
+            better_points[better_points] = ~wh
+        clock_offset_table = clock_offset_table[better_points]
+        clock_residuals = clock_residuals[better_points]
 
     detrend_fun = spline_through_data(clock_offset_table['met'],
                                       clock_residuals, downsample=4)
@@ -141,6 +154,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
     good = clock_offset_table['met'] < np.max(temp_table['met'])
     clock_offset_table = clock_offset_table[good]
+    temp_table['temp_corr_raw'] = temp_table['temp_corr']
 
     tempcorr_idx = np.searchsorted(temp_table['met'],
                                    clock_offset_table['met'])
@@ -225,7 +239,9 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         # temp_table[temp_idx_start:temp_idx_end]
 
     log.info("Final detrending...")
-    table_new = spline_detrending(clock_offset_table, temp_table)
+    table_new = spline_detrending(
+        clock_offset_table, temp_table,
+        outlier_cuts=[-0.002, -0.001, -0.0006, -0.0004])
 
     return table_new
 
@@ -493,7 +509,6 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
         np.abs(freq_changes_table['divisor'] - 2.400034e7) > 20
     if filter_bad:
         freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
-
 
     return freq_changes_table
 
