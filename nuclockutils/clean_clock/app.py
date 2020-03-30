@@ -32,7 +32,7 @@ import json
 
 CLOCKFILE='latest_clock.dat'
 TEMPFILE='tcxo_tmp_archive.csv'
-FREQFILE='latest_freq.csv'
+FREQFILE='latest_freq.dat'
 
 
 def recalc(outfile='save_all.pickle'):
@@ -400,6 +400,7 @@ def create_app():
             className="three columns div-for-charts bg-grey",
             children=[
             dcc.Graph(id='temperature-time-series'),
+            dcc.Graph(id='temperature-gradient-time-series'),
             ]
         ),
         html.Div(id='dummy', style={'display': 'none'}),
@@ -551,8 +552,27 @@ def create_app():
         }
 
 
+    def create_temperature_gradient_timeseries(x, y, axis_type='linear'):
+        return {
+            'data': [dict(
+                x=x,
+                y=y,
+                mode='lines'
+            )],
+            'layout': {
+                'height': 300,
+                'yaxis': {'title': 'TCXO Temp Gradient',
+                    'type': 'linear'},
+                'xaxis': {'title': 'MET', 'showgrid': False,
+                'margin':{'t': 20}}
+
+            }
+        }
+
+
     @app.callback(
-        Output('temperature-time-series', 'figure'),
+        [Output('temperature-time-series', 'figure'),
+         Output('temperature-gradient-time-series', 'figure')],
         [Input('my-figure', 'hoverData'),
          Input("clock-intermediate-value", "children")])
     def update_temperature_timeseries(hoverData, clockfile):
@@ -565,9 +585,12 @@ def create_app():
 
         istart, istop = np.searchsorted(temptable['met'], [xstart, xstop])
 
-        return create_temperature_timeseries(
+        return (create_temperature_timeseries(
             temptable['met'][istart:istop:15],
-            temptable['temperature_smooth'][istart:istop:15])
+            temptable['temperature_smooth'][istart:istop:5]),
+                create_temperature_gradient_timeseries(
+            temptable['met'][istart:istop:15],
+            temptable['temperature_smooth_gradient'][istart:istop:5]))
     return app
 
 
