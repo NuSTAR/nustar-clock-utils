@@ -665,11 +665,11 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
         temptable = temptable[good]
     temptable.meta['gti'] = temp_gtis
 
-    window = np.median(310 / np.diff(temptable['met']))
+    window = np.median(1000 / np.diff(temptable['met']))
     window = int(window // 2 * 2 + 1)
     log.info(f"Smoothing temperature with a window of {window} points")
     temptable['temperature_smooth'] = \
-        savgol_filter(temptable['temperature'], window, 2)
+        savgol_filter(temptable['temperature'], window, 3)
     temptable['temperature_smooth_gradient'] = \
         np.gradient(temptable['temperature_smooth'], temptable['met'],
                     edge_order=2)
@@ -1310,16 +1310,16 @@ def clock_ppm_model(nustar_met, temperature, craig_fit=False):
         parameters of the ppm-time relation (long-term clock decay)
 
     """
-    T0 = 13.5
+    T0 = 13.440
     #     offset = 13.9158325193 - 0.027918 - 4.608765729063114e-4 -7.463444052344004e-9
     # offset = 13.8874536353 - 4.095179312091239e-4
-    offset = 13.9143339 -0.03396646  # sum the "e" parameter from long term
-    ppm_vs_T_pars = [-0.07394150, 0.00157580]
+    offset = 13.91877 -0.02020554 # sum the "e" parameter from long term
+    ppm_vs_T_pars = [-0.07413, 0.00158]
     # ppm_vs_T_pars = [-0.073795, 0.0015002]
     # ppm_vs_time_pars = [0.008276, 256., -220.043,
     #                     3.408586903702425e-05]
-    ppm_vs_time_pars = [0.00808932, 695.402481, -187.325925,
-                        3.8991e-05]
+    ppm_vs_time_pars = [0.00874492067, 100.255995, -0.251789345,
+                        0.0334934847]
     if craig_fit:
         offset = 1.3847529679329989e+01
         ppm_vs_T_pars = [-7.3964896025586133e-02, 1.5055740907563737e-03]

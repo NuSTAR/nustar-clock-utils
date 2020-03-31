@@ -586,10 +586,10 @@ def create_app():
         istart, istop = np.searchsorted(temptable['met'], [xstart, xstop])
 
         return (create_temperature_timeseries(
-            temptable['met'][istart:istop:15],
-            temptable['temperature_smooth'][istart:istop:5]),
+            temptable['met'][istart:istop:5],
+            temptable['temperature'][istart:istop:5]),
                 create_temperature_gradient_timeseries(
-            temptable['met'][istart:istop:15],
+            temptable['met'][istart:istop:5],
             temptable['temperature_smooth_gradient'][istart:istop:5]))
     return app
 
