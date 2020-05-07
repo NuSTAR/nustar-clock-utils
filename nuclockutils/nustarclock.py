@@ -632,9 +632,9 @@ class ClockCorrection():
         header["CCLS0001"] = (
         'BCF     ', "Dataset is a Basic Calibration File")
         header["CDTP0001"] = ('DATA    ', "Calibration file contains data")
-        header["CCNM0001"] = ('FINECLOCK', "Type of calibration data")
+        header["CCNM0001"] = ('CLOCK', "Type of calibration data")
 
-        header["CVSD0001"] = ('2010-01-01', "UCT date when file should first be used")
+        header["CVSD0001"] = ('2012-06-16', "UCT date when file should first be used")
         header["CVST0001"] = ('00:00:00', "UCT time when file should first be used")
 
         header["CVTD0001"] = (date, "Last UTC date when the file should be used (same as DATE)")
