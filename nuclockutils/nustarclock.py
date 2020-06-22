@@ -121,10 +121,11 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
 
     if outlier_cuts is not None:
         log.info("Cutting outliers...")
-        better_points = np.array(clock_residuals == clock_residuals, dtype=bool)
+        better_points = np.array(clock_residuals == clock_residuals,
+                                 dtype=bool)
 
         for i, cut in enumerate(outlier_cuts):
-            mm = median_filter(clock_residuals, 15)
+            mm = median_filter(clock_residuals, 11)
             wh = ((clock_residuals[better_points] - mm[better_points]) < outlier_cuts[
                 i]) | ((clock_residuals[better_points] - mm[better_points]) <
                        outlier_cuts[0])
@@ -246,7 +247,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
     return table_new
 
 
-def residual_roll_std(residuals, window=15):
+def residual_roll_std(residuals, window=30):
     """
 
     Examples
