@@ -899,8 +899,6 @@ def plot_scatter(new_clock_table, clock_offset_table):
                        group='station', label='scatter down').opts(
         opts.Curve(color='k'))
 
-    print(plot_1)
-
     plot_1_all = plot_1.opts(
         opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-700, 700)) * plot_1b * plot_1a
