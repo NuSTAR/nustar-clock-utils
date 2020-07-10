@@ -866,7 +866,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint))
+    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint),
+                       group='station', label='Clock corr')
     plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
 
@@ -891,10 +892,14 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6}).opts(
+    plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6},
+                       group='station', label='scatter up').opts(
         opts.Curve(color='k'))
-    plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
+    plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6},
+                       group='station', label='scatter down').opts(
         opts.Curve(color='k'))
+
+    print(plot_1)
 
     plot_1_all = plot_1.opts(
         opts.Scatter(width=900, height=350, tools=[hover])).opts(
