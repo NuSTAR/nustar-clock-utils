@@ -424,8 +424,8 @@ class ClockCorrection():
             except Exception:
                 import traceback
                 logfile = 'adjust_temperature_error.log'
-                log.warn("Temperature adjustment failed. "
-                         "Full error stack in {logfile}")
+                log.warn(f"Temperature adjustment failed. "
+                         f"Full error stack in {logfile}")
                 with open(logfile, 'w') as fobj:
                     traceback.print_last(file=logfile)
 
@@ -474,6 +474,8 @@ class ClockCorrection():
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
+
+        tempcorr_idx[tempcorr_idx >= table_new['met'].size] = table_new['met'].size -1
 
         clock_residuals = clock_offset_table['offset'] - \
                           table_new['temp_corr'][tempcorr_idx]
@@ -542,7 +544,7 @@ class ClockCorrection():
             table_new['temp_corr'] + diff_trend(table_new['met'])
 
         table_new['temp_corr'] = table_new['temp_corr_detrend']
-        table_new.pop('temp_corr_detrend')
+        table_new.remove_column('temp_corr_detrend')
 
         self.temperature_correction_data = table_new
 
@@ -557,6 +559,7 @@ class ClockCorrection():
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
+        tempcorr_idx[tempcorr_idx >= table_new['met'].size] = table_new['met'].size -1
 
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
@@ -866,7 +869,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint))
+    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint),
+                       group='station', label='Clock corr')
     plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
 
@@ -891,9 +895,11 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6}).opts(
+    plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6},
+                       group='station', label='scatter up').opts(
         opts.Curve(color='k'))
-    plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6}).opts(
+    plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6},
+                       group='station', label='scatter down').opts(
         opts.Curve(color='k'))
 
     plot_1_all = plot_1.opts(
@@ -1114,7 +1120,7 @@ def temperature_correction_table(met_start, met_stop,
     import six
     if hdf_dump_file is not None and os.path.exists(hdf_dump_file):
         log.info(f"Reading cached data from file {hdf_dump_file}")
-        result_table = pd.read_hdf(hdf_dump_file, key='tempdata')
+        result_table = Table.read(hdf_dump_file)
         mets = np.array(result_table['met'])
         if (met_start > mets[10] or met_stop < mets[-20]) and (
                 met_stop - met_start < 3 * 365 * 86400):
@@ -1202,13 +1208,13 @@ def temperature_correction_table(met_start, met_stop,
     log.info("Interpolation done.")
     table = table[:firstidx]
 
-    data = table.to_pandas()
+    # data = table.to_pandas()
 
     if hdf_dump_file is not None:
         log.info(f"Saving intermediate data to {hdf_dump_file}...")
-        data.to_hdf(hdf_dump_file, key='tempdata')
+        table.write(hdf_dump_file)
         log.info(f"Done.")
-    return data
+    return table
 
 
 def main_tempcorr(args=None):
