@@ -775,8 +775,8 @@ class ClockCorrection():
             except Exception:
                 import traceback
                 logfile = 'adjust_temperature_error.log'
-                log.warn("Temperature adjustment failed. "
-                         "Full error stack in {logfile}")
+                log.warn(f"Temperature adjustment failed. "
+                         f"Full error stack in {logfile}")
                 with open(logfile, 'w') as fobj:
                     traceback.print_last(file=logfile)
 
@@ -823,6 +823,7 @@ class ClockCorrection():
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
+        tempcorr_idx[tempcorr_idx >= table_new['met'].size] = table_new['met'].size -1
 
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
@@ -902,7 +903,7 @@ class ClockCorrection():
         header["CCLS0001"] = (
         'BCF     ', "Dataset is a Basic Calibration File")
         header["CDTP0001"] = ('DATA    ', "Calibration file contains data")
-        header["CCNM0001"] = ('FINECLOCK', "Type of calibration data")
+        header["CCNM0001"] = ('CLOCK', "Type of calibration data")
 
         header["CVSD0001"] = ('2010-01-01', "UCT date when file should first be used")
         header["CVST0001"] = ('00:00:00', "UCT time when file should first be used")
@@ -1139,7 +1140,9 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_0a = hv.Curve(dict(x=clock_mets, y=yint))
+    plot_0a = hv.Curve(dict(x=clock_mets, y=yint),
+                       group='station', label='Clock corr')
+
     plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
 
@@ -1163,9 +1166,12 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_1b = hv.Curve({'x': control_points, 'y': roll_std * 1e6}).opts(
+    plot_1b = hv.Curve({'x': control_points, 'y': roll_std * 1e6},
+                       group='station', label='scatter up').opts(
         opts.Curve(color='k'))
-    plot_1a = hv.Curve({'x': control_points, 'y': -roll_std * 1e6}).opts(
+    plot_1a = hv.Curve({'x': control_points, 'y': -roll_std * 1e6},
+                       group='station', label='scatter down').opts(
+
         opts.Curve(color='k'))
 
     plot_1_all = plot_1.opts(
