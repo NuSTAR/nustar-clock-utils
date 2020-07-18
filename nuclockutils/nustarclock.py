@@ -14,7 +14,7 @@ from scipy.ndimage import median_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
 from .utils import filter_with_region, fix_byteorder, rolling_std
 from .utils import robust_linear_fit, cross_two_gtis, get_rough_trend_fun
-from .utils import spline_through_data
+from .utils import spline_through_data, cubic_interpolation
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -1056,52 +1056,27 @@ class ClockCorrection():
         return data
 
 
-def calculate_clock_function(new_clock_table, clock_offset_table):
+def interpolate_clock_function(new_clock_table, mets):
     tab_times = new_clock_table['TIME']
-    clock_mets = clock_offset_table['met']
-    good_mets = (clock_mets > tab_times.min()) & (clock_mets < tab_times.max())
-    clock_offset_table = copy.deepcopy(clock_offset_table[good_mets])
-    clock_mets = clock_offset_table['met']
-    tab_idxs = np.searchsorted(tab_times, clock_mets, side='right') - 1
+    good_mets = (mets > tab_times.min()) & (mets < tab_times.max())
+    mets = mets[good_mets]
+    tab_idxs = np.searchsorted(tab_times, mets, side='right') - 1
 
-    x = clock_mets[:-1]
-    xtab = tab_times[tab_idxs]
-    ytab = new_clock_table['CLOCK_OFF_CORR'][tab_idxs]
-    yptab = new_clock_table['CLOCK_FREQ_CORR'][tab_idxs]
+    clock_off_corr = new_clock_table['CLOCK_OFF_CORR']
+    clock_freq_corr = new_clock_table['CLOCK_FREQ_CORR']
 
-    xtab = [xtab[:-1], xtab[1:]]
-    ytab = [ytab[:-1], ytab[1:]]
-    yptab = [yptab[:-1], yptab[1:]]
+    x = np.array(mets)
+    xtab = [tab_times[tab_idxs], tab_times[tab_idxs + 1]]
+    ytab = [clock_off_corr[tab_idxs], clock_off_corr[tab_idxs + 1]]
+    yptab = [clock_freq_corr[tab_idxs], clock_freq_corr[tab_idxs + 1]]
 
-    dx = x - xtab[0];
-    #     /* Distance between adjoining tabulated abcissae and ordinates */
-    xs = xtab[1] - xtab[0];
-    ys = ytab[1] - ytab[0];
-
-    #     /* Rescale or pull out quantities of interest */
-    dx = dx / xs  # ;             /* Rescale DX */
-    y0 = ytab[0]  # ;           /* No rescaling of Y - start of interval */
-    yp0 = yptab[
-        0]  # ;      /* Rescale tabulated derivatives - start of interval */
-    yp1 = yptab[
-              1] * xs  # ;      /* Rescale tabulated derivatives - end of interval */
-
-    #     /* Compute polynomial coefficients */
-    a = y0;
-    b = yp0;
-    c = 3 * ys - 2 * yp0 - yp1;
-    d = yp0 + yp1 - 2 * ys;
-
-    #     /* Perform cubic interpolation */
-    yint = -a + dx * (b + dx * (c + dx * d))
-
-    return yint, good_mets
+    return cubic_interpolation(x, xtab, ytab, yptab), good_mets
 
 
 def plot_scatter(new_clock_table, clock_offset_table):
     from bokeh.models import HoverTool
-    yint, good_mets = calculate_clock_function(new_clock_table,
-                                               clock_offset_table)
+    yint, good_mets = interpolate_clock_function(new_clock_table,
+                                                 clock_offset_table['met'])
 
     clock_offset_table = clock_offset_table[good_mets][:-1]
     clock_mets = clock_offset_table['met']

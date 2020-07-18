@@ -12,6 +12,7 @@ from astropy.time import Time
 from astropy.coordinates import Angle
 import nuclockutils
 from .utils import filter_with_region
+from .nustarclock import interpolate_clock_function
 
 
 class OrbitalFunctions():
@@ -57,59 +58,6 @@ def get_orbital_functions(orbfile):
     orbfunc.lst_fun = lst_fun
 
     return orbfunc
-
-
-def cubic_interpolation(x, xtab, ytab, yptab):
-    """Cubic interpolation of tabular data.
-
-    Translated from the cubeterp function in seekinterp.c,
-    distributed with HEASOFT.
-
-    Given a tabulated abcissa at two points xtab[] and a tabulated
-    ordinate ytab[] (+derivative yptab[]) at the same abcissae, estimate
-    the ordinate and derivative at requested point "x"
-
-    Works for numbers or arrays for x. If x is an array,
-    xtab, ytab and yptab are arrays of shape (2, x.size).
-    """
-
-    dx = x - xtab[0]
-    # Distance between adjoining tabulated abcissae and ordinates
-    xs = xtab[1] - xtab[0]
-    ys = ytab[1] - ytab[0]
-
-    # Rescale or pull out quantities of interest
-    dx = dx / xs  # Rescale DX
-    y0 = ytab[0]  # No rescaling of Y - start of interval
-    yp0 = yptab[0] * xs  # Rescale tabulated derivatives - start of interval
-    yp1 = yptab[1] * xs  # Rescale tabulated derivatives - end of interval
-
-    # Compute polynomial coefficients
-    a = y0
-    b = yp0
-    c = 3 * ys - 2 * yp0 - yp1
-    d = yp0 + yp1 - 2 * ys
-
-    # Perform cubic interpolation
-    yint = a + dx * (b + dx * (c + dx * d))
-    return yint
-
-
-def interpolate_clock_function(new_clock_table, mets):
-    tab_times = new_clock_table['TIME']
-    good_mets = (mets > tab_times.min()) & (mets < tab_times.max())
-    mets = mets[good_mets]
-    tab_idxs = np.searchsorted(tab_times, mets, side='right') - 1
-
-    clock_off_corr = new_clock_table['CLOCK_OFF_CORR']
-    clock_freq_corr = new_clock_table['CLOCK_FREQ_CORR']
-
-    x = np.array(mets)
-    xtab = [tab_times[tab_idxs], tab_times[tab_idxs + 1]]
-    ytab = [clock_off_corr[tab_idxs], clock_off_corr[tab_idxs + 1]]
-    yptab = [clock_freq_corr[tab_idxs], clock_freq_corr[tab_idxs + 1]]
-
-    return cubic_interpolation(x, xtab, ytab, yptab), good_mets
 
 
 def get_dummy_parfile_for_position(orbfile):

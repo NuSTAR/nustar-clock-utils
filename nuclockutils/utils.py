@@ -507,3 +507,39 @@ def filter_dict_with_re(dictionary, regex):
         if re.match(key):
             new_dict[key] = val
     return new_dict
+
+
+def cubic_interpolation(x, xtab, ytab, yptab):
+    """Cubic interpolation of tabular data.
+
+    Translated from the cubeterp function in seekinterp.c,
+    distributed with HEASOFT.
+
+    Given a tabulated abcissa at two points xtab[] and a tabulated
+    ordinate ytab[] (+derivative yptab[]) at the same abcissae, estimate
+    the ordinate and derivative at requested point "x"
+
+    Works for numbers or arrays for x. If x is an array,
+    xtab, ytab and yptab are arrays of shape (2, x.size).
+    """
+
+    dx = x - xtab[0]
+    # Distance between adjoining tabulated abcissae and ordinates
+    xs = xtab[1] - xtab[0]
+    ys = ytab[1] - ytab[0]
+
+    # Rescale or pull out quantities of interest
+    dx = dx / xs  # Rescale DX
+    y0 = ytab[0]  # No rescaling of Y - start of interval
+    yp0 = yptab[0] * xs  # Rescale tabulated derivatives - start of interval
+    yp1 = yptab[1] * xs  # Rescale tabulated derivatives - end of interval
+
+    # Compute polynomial coefficients
+    a = y0
+    b = yp0
+    c = 3 * ys - 2 * yp0 - yp1
+    d = yp0 + yp1 - 2 * ys
+
+    # Perform cubic interpolation
+    yint = a + dx * (b + dx * (c + dx * d))
+    return yint
