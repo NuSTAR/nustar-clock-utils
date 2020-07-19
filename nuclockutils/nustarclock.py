@@ -23,6 +23,7 @@ import copy
 import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews import opts
+# import matplotlib.pyplot as plt
 
 hv.extension('bokeh')
 
@@ -117,7 +118,9 @@ def load_and_flag_clock_table(clockfile="latest_clock.dat"):
 
 def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
     tempcorr_idx = np.searchsorted(temptable['met'], clock_offset_table['met'])
-    clock_residuals = np.array(clock_offset_table['offset'] - temptable['temp_corr'][tempcorr_idx])
+    clock_residuals = \
+        np.array(clock_offset_table['offset'] -
+                 temptable['temp_corr'][tempcorr_idx])
 
     if outlier_cuts is not None:
         log.info("Cutting outliers...")
@@ -145,7 +148,8 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
 
     temptable['std'] = r_std[clidx]
     temptable['temp_corr_trend'] = detrend_fun(temptable['met'])
-    temptable['temp_corr_detrend'] = temptable['temp_corr'] + temptable['temp_corr_trend']
+    temptable['temp_corr_detrend'] = \
+        temptable['temp_corr'] + temptable['temp_corr_trend']
 
     return temptable
 
@@ -160,8 +164,8 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
     tempcorr_idx = np.searchsorted(temp_table['met'],
                                    clock_offset_table['met'])
 
-    clock_residuals = clock_offset_table['offset'] - \
-                      temp_table['temp_corr'][tempcorr_idx]
+    clock_residuals = \
+        clock_offset_table['offset'] - temp_table['temp_corr'][tempcorr_idx]
 
     use_for_interpol, bad_malindi_time = \
         get_malindi_data_except_when_out(clock_offset_table)
@@ -199,7 +203,6 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         table_new['temp_corr'] += p(table_new['met'])
 
         if debug:
-            import matplotlib.pyplot as plt
             fig = plt.figure()
             plt.plot(table_new['met'], table_new['temp_corr'], alpha=0.5)
             plt.scatter(cltable_new['met'], cltable_new['offset'])
@@ -215,28 +218,42 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
     # Interpolate the solution along bad time intervals
     for g in btis:
-        log.info(f"Treating bad data from METs {g[0]}--{g[1]}")
         start, stop = g
+        log.info(f"Treating bad data from METs {start}--{stop}")
+
         temp_idx_start, temp_idx_end = \
             np.searchsorted(temp_table['met'], g)
         if temp_idx_end - temp_idx_start == 0:
             continue
         table_new = temp_table[temp_idx_start:temp_idx_end]
-
+        cl_idx_start, cl_idx_end = \
+            np.searchsorted(clock_offset_table['met'], g)
+        local_clockoff = clock_offset_table[cl_idx_start - 1:cl_idx_end + 1]
+        print(local_clockoff)
         last_good_tempcorr = temp_table['temp_corr'][temp_idx_start - 1]
         next_good_tempcorr = temp_table['temp_corr'][temp_idx_end + 1]
         last_good_time = temp_table['met'][temp_idx_start - 1]
+        next_good_time = temp_table['met'][temp_idx_end + 1]
 
-        time_since_last_good_tempcorr = \
-            table_new['met']- last_good_time
+        clock_off = local_clockoff['offset']
+        clock_tim = local_clockoff['met']
 
-        m = (next_good_tempcorr - last_good_tempcorr) / \
-            (time_since_last_good_tempcorr[-1] - time_since_last_good_tempcorr[0])
-        q = last_good_tempcorr
-
-        table_new['temp_corr'][:] = q + \
-            time_since_last_good_tempcorr * m
-
+        clock_off = np.concatenate(
+            ([last_good_tempcorr], clock_off, [next_good_tempcorr]))
+        clock_tim = np.concatenate(
+            ([last_good_time], clock_tim, [next_good_time]))
+        order = np.argsort(clock_tim)
+        print(table_new['met'])
+        clock_off_fun = interp1d(
+            clock_tim[order], clock_off[order], kind='linear', assume_sorted=True)
+        table_new['temp_corr'][:] = clock_off_fun(table_new['met'])
+        # import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.scatter(clock_tim, clock_off)
+        # plt.plot(table_new['met'], table_new['temp_corr'])
+        # # for met in table_new['met']:
+        # #     plt.axvline(met, alpha=0.3)
+        # plt.show()
         # temp_table[temp_idx_start:temp_idx_end]
 
     log.info("Final detrending...")
@@ -804,13 +821,14 @@ class ClockCorrection():
             self.temperature_correction_data,
             load_clock_offset_table(self.clock_offset_file), self.gtis,
             debug=False)
+        table_new['temp_corr_nodetrend'] = table_new['temp_corr']
         table_new['temp_corr'] = table_new['temp_corr_detrend']
         table_new.remove_column('temp_corr_detrend')
 
         # 'temp_corr_detrend']
         self.temperature_correction_data = table_new
 
-    def write_clock_file(self, filename=None):
+    def write_clock_file(self, filename=None, save_nodetrend=False):
         from astropy.io.fits import Header, HDUList, BinTableHDU, PrimaryHDU
         from astropy.time import Time
 
@@ -846,6 +864,20 @@ class ClockCorrection():
                                      table_new['met'])})
 
         new_clock_table_subsample = new_clock_table[::100]
+        del new_clock_table
+        if save_nodetrend:
+            new_clock_table_nodetrend = Table(
+                {'TIME': table_new['met'],
+                 'CLOCK_OFF_CORR': -table_new['temp_corr_nodetrend'],
+                 'CLOCK_FREQ_CORR': np.gradient(
+                     -table_new['temp_corr'],
+                     table_new['met'], edge_order=2),
+                 'CLOCK_ERR_CORR': clock_err_fun(
+                     table_new['met'])})
+            new_clock_table_subsample_nodetrend = \
+                new_clock_table_nodetrend[::100]
+            del new_clock_table_nodetrend
+
         t = Time.now()
         t.format = 'iso'
         t.out_subfmt = 'date'
@@ -858,7 +890,7 @@ class ClockCorrection():
         tstop = clstop
 
         header = Header()
-        header["XTENSION"] = ('BINTABLE', "Written by IDL")
+        header["XTENSION"] = ('BINTABLE', "Written by Python")
         header["BITPIX"] = (8, "NAXIS   =                    2 /Binary table")
         header["TFIELDS"] = (4, "Number of columns")
         header["EXTNAME"] = ('NU_FINE_CLOCK', "NuSTAR fine clock correction")
@@ -970,90 +1002,96 @@ class ClockCorrection():
             "on subsequent keywords whose name = 'CONTINUE'."
 
         hdu = BinTableHDU(new_clock_table_subsample, header=header)
+        hdulist = [prihdu, hdu]
+        if save_nodetrend:
+            hdu_nodetrend = \
+                BinTableHDU(new_clock_table_subsample_nodetrend,
+                            header=header, name="NU_FINE_CLOCK_NODETREND")
+            hdulist.append(hdu_nodetrend)
 
-        HDUList([prihdu, hdu]).writeto(filename, overwrite=True)
+        HDUList(hdulist).writeto(filename, overwrite=True)
 
-    def adjust_temperature_correction_old(self):
-        import matplotlib.pyplot as plt
-        data = self.temperature_correction_data
-        times = np.array(data['met'])
-        start = times[0]
-        stop = times[-1]
-
-        clock_offset_table_all, mask = self.load_offset_table(start, stop)
-        clock_offset_table = clock_offset_table_all[mask]
-
-        cltimes = clock_offset_table['met']
-        offsets = clock_offset_table['offset']
-
-        first_clock_idx = np.argmin(np.abs(times - cltimes[0]))
-
-        data['temp_corr_rough'] = np.array(data['temp_corr'])
-
-        data['temp_corr'] = \
-            data['temp_corr_rough'] - data['temp_corr_rough'][first_clock_idx] + \
-            offsets[0]
-
-        fun = interp1d(data['met'], data['temp_corr'], bounds_error=False,
-                       fill_value='extrapolate')
-
-        fit_result = robust_linear_fit(cltimes, fun(cltimes) - offsets)
-        m, q = fit_result.estimator_.coef_, fit_result.estimator_.intercept_
-
-        inlier_mask = fit_result.inlier_mask_
-        outlier_mask = np.logical_not(inlier_mask)
-
-        def fit_function(times, m, q):
-            return fun(times) - (times * m + q)
-
-        if self.plot_file is not None:
-            fig = plt.figure(figsize=(15, 10))
-            gs = plt.GridSpec(2, 1, hspace=0, height_ratios=(3, 2))
-            ax0 = plt.subplot(gs[0])
-            ax1 = plt.subplot(gs[1], sharex=ax0)
-            fine_times = np.arange(start, stop, 100)
-            ax0.scatter(clock_offset_table_all['met'],
-                        clock_offset_table_all['offset'] * 1000, alpha=0.5,
-                        color='k',
-                        label="Discarded offsets (bad)")
-            ax0.scatter(cltimes, offsets * 1000, label="Offsets used for fit")
-            if np.any(outlier_mask):
-                ax0.scatter(cltimes[outlier_mask],
-                            offsets[outlier_mask] * 1000,
-                            color='r', marker='x', s=30, zorder=10,
-                            label="Fit outliers")
-            ax0.plot(fine_times, fun(fine_times) * 1000, alpha=0.5)
-            new_tcorr = fit_function(fine_times, m, q)
-            ax0.plot(fine_times, new_tcorr * 1000)
-            ax0.set_ylabel("Offset (ms)")
-            ax0.grid()
-
-            ax1.scatter(clock_offset_table_all['met'],
-                        1e6 * (clock_offset_table_all['offset'] - fit_function(
-                            clock_offset_table_all['met'], m, q)),
-                        color='k', alpha=0.5)
-            ax1.scatter(cltimes, 1e6 * (offsets - fit_function(cltimes, m, q)))
-            if np.any(outlier_mask):
-                ax1.scatter(cltimes[outlier_mask],
-                            1e6 * (offsets - fit_function(cltimes, m, q))[
-                                outlier_mask],
-                            color='r', marker='x', s=30, zorder=10,
-                            label="Fit outliers")
-
-            ax1.axhline(0)
-            ax1.set_xlabel("MET (s)")
-            ax1.set_ylabel("Residual (us)")
-            ax1.set_ylim((-500, 500))
-            ax1.grid()
-
-            plt.savefig(self.plot_file)
-            plt.close(fig)
-
-        log.info(f"Correcting for a drift of {m} s/s")
-
-        data['temp_corr'] = data['temp_corr'] - (m * times + q)
-        self.temperature_correction_data = data
-        return data
+    # def adjust_temperature_correction_old(self):
+    #     import matplotlib.pyplot as plt
+    #     data = self.temperature_correction_data
+    #     times = np.array(data['met'])
+    #     start = times[0]
+    #     stop = times[-1]
+    #
+    #     clock_offset_table_all, mask = self.load_offset_table(start, stop)
+    #     clock_offset_table = clock_offset_table_all[mask]
+    #
+    #     cltimes = clock_offset_table['met']
+    #     offsets = clock_offset_table['offset']
+    #
+    #     first_clock_idx = np.argmin(np.abs(times - cltimes[0]))
+    #
+    #     data['temp_corr_rough'] = np.array(data['temp_corr'])
+    #
+    #     data['temp_corr'] = \
+    #         data['temp_corr_rough'] - data['temp_corr_rough'][first_clock_idx] + \
+    #         offsets[0]
+    #
+    #     fun = interp1d(data['met'], data['temp_corr'], bounds_error=False,
+    #                    fill_value='extrapolate')
+    #
+    #     fit_result = robust_linear_fit(cltimes, fun(cltimes) - offsets)
+    #     m, q = fit_result.estimator_.coef_, fit_result.estimator_.intercept_
+    #
+    #     inlier_mask = fit_result.inlier_mask_
+    #     outlier_mask = np.logical_not(inlier_mask)
+    #
+    #     def fit_function(times, m, q):
+    #         return fun(times) - (times * m + q)
+    #
+    #     if self.plot_file is not None:
+    #         fig = plt.figure(figsize=(15, 10))
+    #         gs = plt.GridSpec(2, 1, hspace=0, height_ratios=(3, 2))
+    #         ax0 = plt.subplot(gs[0])
+    #         ax1 = plt.subplot(gs[1], sharex=ax0)
+    #         fine_times = np.arange(start, stop, 100)
+    #         ax0.scatter(clock_offset_table_all['met'],
+    #                     clock_offset_table_all['offset'] * 1000, alpha=0.5,
+    #                     color='k',
+    #                     label="Discarded offsets (bad)")
+    #         ax0.scatter(cltimes, offsets * 1000, label="Offsets used for fit")
+    #         if np.any(outlier_mask):
+    #             ax0.scatter(cltimes[outlier_mask],
+    #                         offsets[outlier_mask] * 1000,
+    #                         color='r', marker='x', s=30, zorder=10,
+    #                         label="Fit outliers")
+    #         ax0.plot(fine_times, fun(fine_times) * 1000, alpha=0.5)
+    #         new_tcorr = fit_function(fine_times, m, q)
+    #         ax0.plot(fine_times, new_tcorr * 1000)
+    #         ax0.set_ylabel("Offset (ms)")
+    #         ax0.grid()
+    #
+    #         ax1.scatter(clock_offset_table_all['met'],
+    #                     1e6 * (clock_offset_table_all['offset'] - fit_function(
+    #                         clock_offset_table_all['met'], m, q)),
+    #                     color='k', alpha=0.5)
+    #         ax1.scatter(cltimes, 1e6 * (offsets - fit_function(cltimes, m, q)))
+    #         if np.any(outlier_mask):
+    #             ax1.scatter(cltimes[outlier_mask],
+    #                         1e6 * (offsets - fit_function(cltimes, m, q))[
+    #                             outlier_mask],
+    #                         color='r', marker='x', s=30, zorder=10,
+    #                         label="Fit outliers")
+    #
+    #         ax1.axhline(0)
+    #         ax1.set_xlabel("MET (s)")
+    #         ax1.set_ylabel("Residual (us)")
+    #         ax1.set_ylim((-500, 500))
+    #         ax1.grid()
+    #
+    #         plt.savefig(self.plot_file)
+    #         plt.close(fig)
+    #
+    #     log.info(f"Correcting for a drift of {m} s/s")
+    #
+    #     data['temp_corr'] = data['temp_corr'] - (m * times + q)
+    #     self.temperature_correction_data = data
+    #     return data
 
 
 def interpolate_clock_function(new_clock_table, mets):
@@ -1078,7 +1116,7 @@ def plot_scatter(new_clock_table, clock_offset_table):
     yint, good_mets = interpolate_clock_function(new_clock_table,
                                                  clock_offset_table['met'])
 
-    clock_offset_table = clock_offset_table[good_mets][:-1]
+    clock_offset_table = clock_offset_table[good_mets]
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
     clock_residuals_detrend = clock_offset_table['offset'] - yint
@@ -1422,22 +1460,23 @@ def temperature_correction_table(met_start, met_stop,
             log.warning(
                 f"Too few temperature points in interval "
                 f"{start} to {stop} (MET)")
-            continue
+            temp_corr = np.zeros_like(times_fine)
+        else:
+            delay_function = \
+                temperature_delay(temptable_filt, divisors[i], craig_fit=craig_fit,
+                                  time_resolution=time_resolution)
 
-        delay_function = \
-            temperature_delay(temptable_filt, divisors[i], craig_fit=craig_fit,
-                              time_resolution=time_resolution)
-
-        temp_corr = \
-            delay_function(times_fine) + last_corr - delay_function(last_time)
+            temp_corr = \
+                delay_function(times_fine) + last_corr - delay_function(last_time)
+            temp_corr[temp_corr != temp_corr] = 0
 
         new_data = Table(dict(met=times_fine,
                               temp_corr=temp_corr,
                               divisor=np.zeros_like(times_fine) + divisors[i]))
 
-        if np.any(temp_corr != temp_corr):
-            log.error("Invalid data in temperature table")
-            break
+        # if np.any(temp_corr != temp_corr):
+        #     log.error("Invalid data in temperature table")
+        #     break
 
         N = len(times_fine)
         table[firstidx:firstidx + N] = new_data
@@ -1514,6 +1553,10 @@ def main_create_clockfile(args=None):
                         help="Output file name")
     parser.add_argument("--cache", default=None,
                         help="HDF5 dump file used as cache (ext. hdf5)")
+    parser.add_argument("--save-nodetrend",
+                        help="Save un-detrended correction in separate FITS "
+                             "extension",
+                        action='store_true', default=False)
 
     args = parser.parse_args(args)
 
@@ -1522,7 +1565,8 @@ def main_create_clockfile(args=None):
                                 clock_offset_file=args.offsets,
                                 hdf_dump_file=args.cache,
                                 freqchange_file=args.frequency_changes)
-    clockcorr.write_clock_file(args.outfile)
+    clockcorr.write_clock_file(args.outfile,
+                               save_nodetrend=args.save_nodetrend)
 
     plot = plot_scatter(Table.read(args.outfile, hdu="NU_FINE_CLOCK"),
                         clockcorr.clock_offset_table)

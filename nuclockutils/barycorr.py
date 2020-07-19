@@ -121,7 +121,8 @@ def correct_times(times, bary_fun, clock_fun=None):
 
 def apply_clock_correction(
     fname, orbfile, outfile='bary.evt', clockfile=None,
-    parfile=None, ephem='DE421', radecsys='ICRS', overwrite=False):
+    parfile=None, ephem='DE421', radecsys='ICRS', overwrite=False,
+    nodetrend=False):
     version = nuclockutils.__version__
 
     bary_fun = get_barycentric_correction(orbfile, parfile, ephem=ephem)
@@ -129,9 +130,12 @@ def apply_clock_correction(
         times = hdul[1].data['TIME']
         clock_fun = None
         if clockfile is not None and os.path.exists(clockfile):
-            clocktable = Table.read(clockfile)
+            hduname = 'NU_FINE_CLOCK'
+            if nodetrend:
+                hduname = 'NU_FINE_CLOCK_NODETREND'
+            log.info(f"Read extension {hduname}")
+            clocktable = Table.read(clockfile, hdu=hduname)
             clock_corr, _ = interpolate_clock_function(clocktable, times)
-
             clock_fun = interp1d(times, clock_corr,
                 assume_sorted=True, bounds_error=False, fill_value='extrapolate')
 
@@ -156,7 +160,7 @@ def apply_clock_correction(
             hdu.header['TIMEZERO'] = 0.0
             hdu.header['TREFDIR'] = 'RA_OBJ,DEC_OBJ'
             hdu.header['TREFPOS'] = 'BARYCENTER'
-        hdul.writeto(outfile, overwrite=overwrite)
+        hdul.writeto(outfile, overwrite=True)
 
 
 def _default_out_file(args):
@@ -165,6 +169,8 @@ def _default_out_file(args):
         outfile += '_noclock'
     if not os.path.exists(args.parfile):
         outfile += '_nopar'
+    if args.use_nodetrend:
+        outfile += '_nodetrend'
     outfile += '.evt'
 
     return outfile
@@ -192,6 +198,10 @@ def main_barycorr(args=None):
     parser.add_argument("-r", "--region", default=None, type=str,
                         help="Filter with ds9-compatible region file. MUST be"
                              " a circular region in the FK5 frame")
+    parser.add_argument("--use-nodetrend",
+                        help="Use un-detrended correction in separate FITS "
+                             "extension",
+                        action='store_true', default=False)
 
     args = parser.parse_args(args)
 
@@ -203,8 +213,8 @@ def main_barycorr(args=None):
         args.file = filter_with_region(args.file)
 
     apply_clock_correction(
-        args.file, args.orbitfile, parfile=args.parfile, outfile=args.outfile,
-        overwrite=args.overwrite)
+        args.file, args.orbitfile, parfile=args.parfile, outfile=outfile,
+        overwrite=args.overwrite, nodetrend=args.use_nodetrend, clockfile=args.clockfile)
 
     return outfile
 
