@@ -122,7 +122,7 @@ def correct_times(times, bary_fun, clock_fun=None):
 def apply_clock_correction(
     fname, orbfile, outfile='bary.evt', clockfile=None,
     parfile=None, ephem='DE421', radecsys='ICRS', overwrite=False,
-    nodetrend=False):
+    nodetrend=False, shift_times=0):
     version = nuclockutils.__version__
 
     bary_fun = get_barycentric_correction(orbfile, parfile, ephem=ephem)
@@ -145,11 +145,11 @@ def apply_clock_correction(
                 if hdu.data is not None and keyname in hdu.data.names:
                     log.info(f"Updating column {keyname}")
                     hdu.data[keyname] = \
-                        correct_times(hdu.data[keyname], bary_fun, clock_fun)
+                        correct_times(hdu.data[keyname] + shift_times, bary_fun, clock_fun)
                 if keyname in hdu.header:
                     log.info(f"Updating header keyword {keyname}")
                     hdu.header[keyname] = \
-                        correct_times(hdu.header[keyname], bary_fun, clock_fun)
+                        correct_times(hdu.header[keyname] + shift_times, bary_fun, clock_fun)
 
             hdu.header['CREATOR'] = f'NuSTAR Clock Utils - v. {version}'
             hdu.header['DATE'] = Time.now().fits
@@ -190,6 +190,8 @@ def main_barycorr(args=None):
                         default=None, type=str)
     parser.add_argument("-o", "--outfile", default=None,
                         help="Output file name (default bary_<opts>.evt)")
+    parser.add_argument("--shift-times", default=0, type=float,
+                        help="Shift times by this amount")
     parser.add_argument("-c", "--clockfile", default=None,
                         help="Clock correction file")
     parser.add_argument("--overwrite",
@@ -214,7 +216,9 @@ def main_barycorr(args=None):
 
     apply_clock_correction(
         args.file, args.orbitfile, parfile=args.parfile, outfile=outfile,
-        overwrite=args.overwrite, nodetrend=args.use_nodetrend, clockfile=args.clockfile)
+        overwrite=args.overwrite, nodetrend=args.use_nodetrend,
+        clockfile=args.clockfile,
+        shift_times=args.shift_times)
 
     return outfile
 

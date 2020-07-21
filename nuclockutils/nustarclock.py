@@ -13,8 +13,8 @@ from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
 from .utils import filter_with_region, fix_byteorder, rolling_std
-from .utils import robust_linear_fit, cross_two_gtis, get_rough_trend_fun
-from .utils import spline_through_data, cubic_interpolation
+from .utils import measure_overall_trend, cross_two_gtis, get_rough_trend_fun
+from .utils import spline_through_data, cubic_interpolation, robust_poly_fit
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -194,21 +194,49 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         cltable_new = clock_offset_table[cl_idx_start:cl_idx_end]
         met = cltable_new['met']
         residuals = clock_residuals[cl_idx_start:cl_idx_end]
+        met0 = met[0]
+        met_rescale = (met - met0)/(met[-1] - met0)
+        _, m, q = measure_overall_trend(met_rescale, residuals)
+        # p_new = get_rough_trend_fun(met, residuals)
+        #
+        # if p_new is not None:
+        #     p = p_new
+        poly_order = min(met.size // 300 + 1, 10)
+        p0 = np.zeros(poly_order + 1)
+        p0[0] = q
+        if p0.size > 1:
+            p0[1] = m
+        log.info(f"Fitting a polinomial of order {poly_order}")
+        p = robust_poly_fit(met_rescale, residuals, order=poly_order,
+                            p0=p0)
+        # if poly_order >=2:
+        import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.plot(met_rescale, residuals)
+        # plt.plot(met_rescale, p(met_rescale))
+        # plt.plot(met_rescale, m * (met_rescale) + q)
 
-        p_new = get_rough_trend_fun(met, residuals)
+        table_mets_rescale = (table_new['met'] - met0) / (met[-1] - met0)
+        corr = p(table_mets_rescale)
 
-        if p_new is not None:
-            p = p_new
+        sub_residuals = residuals - p(met_rescale)
+        m = (sub_residuals[-1] - sub_residuals[0]) / (met_rescale[-1] - met_rescale[0])
+        q = sub_residuals[0]
 
-        table_new['temp_corr'] += p(table_new['met'])
+        # plt.plot(table_mets_rescale, corr + m * (table_mets_rescale - met_rescale[0]) + q, lw=2)
+
+        corr = corr + m * (table_mets_rescale - met_rescale[0]) + q
+        table_new['temp_corr'] += corr
 
         if debug:
+            import matplotlib.pyplot as plt
             fig = plt.figure()
             plt.plot(table_new['met'], table_new['temp_corr'], alpha=0.5)
             plt.scatter(cltable_new['met'], cltable_new['offset'])
             plt.plot(table_new['met'], table_new['temp_corr'])
             plt.savefig(f'{int(start)}--{int(stop)}_detr.png')
             plt.close(fig)
+        # plt.show()
 
         print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
 
@@ -232,6 +260,15 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         next_good_tempcorr = temp_table['temp_corr'][temp_idx_end + 1]
         last_good_time = temp_table['met'][temp_idx_start - 1]
         next_good_time = temp_table['met'][temp_idx_end + 1]
+
+        if cl_idx_end - cl_idx_start < 2:
+            log.info("Not enough good clock measurements. Interpolating")
+            m = (next_good_tempcorr - last_good_tempcorr) / \
+              (next_good_time - last_good_time)
+            q = last_good_tempcorr
+            table_new['temp_corr'][:] = \
+                q + (table_new['met'] - last_good_time) * m
+            continue
 
         clock_off = local_clockoff['offset']
         clock_tim = local_clockoff['met']
@@ -818,7 +855,8 @@ class ClockCorrection():
         # 'temp_corr_detrend']
         self.temperature_correction_data = table_new
 
-    def write_clock_file(self, filename=None, save_nodetrend=False):
+    def write_clock_file(self, filename=None, save_nodetrend=False,
+                         shift_times=0.):
         from astropy.io.fits import Header, HDUList, BinTableHDU, PrimaryHDU
         from astropy.time import Time
 
@@ -859,19 +897,20 @@ class ClockCorrection():
                 continue
             clockerr[temp_idx_start:temp_idx_end] = 0.001
 
-        new_clock_table = Table({'TIME': table_new['met'],
-                                 'CLOCK_OFF_CORR': -table_new['temp_corr'],
-                                 'CLOCK_FREQ_CORR': np.gradient(
-                                     -table_new['temp_corr'],
-                                     table_new['met'], edge_order=2),
-                                 'CLOCK_ERR_CORR': clockerr})
+        new_clock_table = Table(
+            {'TIME': table_new['met'],
+             'CLOCK_OFF_CORR': -table_new['temp_corr'] + shift_times,
+             'CLOCK_FREQ_CORR': np.gradient(
+                 -table_new['temp_corr'],
+                 table_new['met'], edge_order=2),
+             'CLOCK_ERR_CORR': clockerr})
 
         new_clock_table_subsample = new_clock_table[::100]
         del new_clock_table
         if save_nodetrend:
             new_clock_table_nodetrend = Table(
                 {'TIME': table_new['met'],
-                 'CLOCK_OFF_CORR': -table_new['temp_corr_nodetrend'],
+                 'CLOCK_OFF_CORR': -table_new['temp_corr_nodetrend'] + shift_times,
                  'CLOCK_FREQ_CORR': np.gradient(
                      -table_new['temp_corr'],
                      table_new['met'], edge_order=2),
@@ -1032,13 +1071,14 @@ def interpolate_clock_function(new_clock_table, mets):
     return cubic_interpolation(x, xtab, ytab, yptab), good_mets
 
 
-def plot_scatter(new_clock_table, clock_offset_table):
+def plot_scatter(new_clock_table, clock_offset_table, shift_times=0):
     from bokeh.models import HoverTool
     yint, good_mets = interpolate_clock_function(new_clock_table,
                                                  clock_offset_table['met'])
 
     yint = - yint
     clock_offset_table = clock_offset_table[good_mets]
+    clock_offset_table['offset'] -= shift_times
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
     clock_residuals_detrend = clock_offset_table['offset'] - yint
@@ -1479,6 +1519,8 @@ def main_create_clockfile(args=None):
                         help="Output file name")
     parser.add_argument("--cache", default=None,
                         help="HDF5 dump file used as cache (ext. hdf5)")
+    parser.add_argument("--shift-times", default=0, type=float,
+                        help="Shift times by this amount")
     parser.add_argument("--save-nodetrend",
                         help="Save un-detrended correction in separate FITS "
                              "extension",
@@ -1492,10 +1534,12 @@ def main_create_clockfile(args=None):
                                 hdf_dump_file=args.cache,
                                 freqchange_file=args.frequency_changes)
     clockcorr.write_clock_file(args.outfile,
-                               save_nodetrend=args.save_nodetrend)
+                               save_nodetrend=args.save_nodetrend,
+                               shift_times=args.shift_times)
 
     plot = plot_scatter(Table.read(args.outfile, hdu="NU_FINE_CLOCK"),
-                        clockcorr.clock_offset_table)
+                        clockcorr.clock_offset_table,
+                        shift_times=args.shift_times)
     from bokeh.io import output_file, save, show
     outfig = args.outfile.replace(".gz", "").replace(".fits", "")
     renderer = hv.renderer('bokeh')

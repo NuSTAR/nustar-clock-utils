@@ -381,6 +381,37 @@ def robust_linear_fit(x, y):
     return ransac
 
 
+def robust_poly_fit(x, y, order=3, p0=None):
+    """
+    Examples
+    --------
+    >>> x = np.arange(10)
+    >>> y = x**2
+    >>> fun = robust_poly_fit(x, y, order=2, p0=np.zeros(3))
+    >>> np.allclose(fun(x), y)
+    True
+    """
+    from scipy.optimize import least_squares
+
+    def fun_to_fit(poly, x):
+        result = 0
+        x_power = 1
+        for i, p in enumerate(poly):
+            result += p * x_power
+            if i < poly.size - 1:
+                x_power *= x
+        return result
+    def resid_func(poly, x, y):
+        return fun_to_fit(poly, x) - y
+    res_robust = least_squares(resid_func, p0, loss='soft_l1',
+                               f_scale=0.1,
+                               args=(x, y))
+    print(p0, res_robust.x)
+    def return_fun(x):
+        return fun_to_fit(res_robust.x, x)
+    return return_fun
+
+
 def measure_overall_trend(x, y, ref_size=200):
     """
 
