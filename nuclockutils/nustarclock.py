@@ -962,6 +962,9 @@ class ClockCorrection():
         header[
             'COMMENT'] = "character at the end of a string which is then continued"
         header['COMMENT'] = "on subsequent keywords whose name = 'CONTINUE'."
+        header['COMMENT'] = ""
+        if shift_times != 0.:
+            header['COMMENT'] = f"A systematic shift of {shift_times} s was applied to the correction"
         header["RADECSYS"] = ('FK5     ', "celestial coord system")
         header["TIMEUNIT"] = ('s       ', "Units of header time keywords")
         header["TASSIGN"] = ('SATELLITE', "Time assigned by onboard clock")
