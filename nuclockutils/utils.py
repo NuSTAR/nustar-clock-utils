@@ -406,7 +406,6 @@ def robust_poly_fit(x, y, order=3, p0=None):
     res_robust = least_squares(resid_func, p0, loss='soft_l1',
                                f_scale=0.1,
                                args=(x, y))
-    print(p0, res_robust.x)
     def return_fun(x):
         return fun_to_fit(res_robust.x, x)
     return return_fun

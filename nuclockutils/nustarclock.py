@@ -109,8 +109,9 @@ def calculate_stats(all_data):
     print("-----------------------------------------------------------------------")
 
 
-def load_and_flag_clock_table(clockfile="latest_clock.dat"):
-    clock_offset_table = load_clock_offset_table(clockfile)
+def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=False):
+    clock_offset_table = load_clock_offset_table(clockfile,
+                                                 shift_non_malindi=shift_non_malindi)
     clock_offset_table = flag_bad_points(
         clock_offset_table, db_file='BAD_POINTS_DB.dat')
     return clock_offset_table
@@ -238,7 +239,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
             plt.close(fig)
         # plt.show()
 
-        print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
+        # print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
 
     btis = np.array(
         [[g0, g1] for g0, g1 in zip(gtis[:-1, 1], gtis[1:, 0])])
@@ -417,7 +418,7 @@ def _look_for_freq_change_file():
     return fchange_files[-1]
 
 
-def read_clock_offset_table(clockoffset_file=None):
+def read_clock_offset_table(clockoffset_file=None, shift_non_malindi=False):
     """
     Parameters
     ----------
@@ -435,6 +436,10 @@ def read_clock_offset_table(clockoffset_file=None):
                                     format='csv', delimiter=' ',
                                     names=['uxt', 'met', 'offset', 'divisor',
                                            'station'])
+    if shift_non_malindi:
+        log.info("Shifting non-Malindi clock offsets down by 0.5 ms")
+        all_but_malindi = clock_offset_table['station'] != 'MLD'
+        clock_offset_table['offset'][all_but_malindi] -= 0.0005
     clock_offset_table['mjd'] = sec_to_mjd(clock_offset_table['met'])
     clock_offset_table.remove_row(len(clock_offset_table) - 1)
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
@@ -445,7 +450,6 @@ def read_clock_offset_table(clockoffset_file=None):
     for b in ALL_BAD_POINTS:
         nearest = np.argmin(np.abs(clock_offset_table['met'] - b))
         if np.abs(clock_offset_table['met'][nearest] - b) < 1:
-            #             print(f"Removing clock offset at time {b}")
             clock_offset_table['flag'][nearest] = True
 
     return clock_offset_table
@@ -747,8 +751,9 @@ def load_freq_changes(freq_change_file):
 
 
 @lru_cache(maxsize=64)
-def load_clock_offset_table(clock_offset_file):
-    return read_clock_offset_table(clock_offset_file)
+def load_clock_offset_table(clock_offset_file, shift_non_malindi=False):
+    return read_clock_offset_table(clock_offset_file,
+                                   shift_non_malindi=shift_non_malindi)
 
 
 class ClockCorrection():
@@ -796,7 +801,8 @@ class ClockCorrection():
         self.plot_file = label + "_clock_adjustment.png"
         self.clock_offset_file = clock_offset_file
         self.clock_offset_table = \
-            read_clock_offset_table(self.clock_offset_file)
+            read_clock_offset_table(self.clock_offset_file,
+                                    shift_non_malindi=True)
 
         self.clock_jump_times = \
             np.array([78708320, 79657575, 81043985, 82055671, 293346772])
@@ -846,7 +852,8 @@ class ClockCorrection():
     def adjust_temperature_correction(self):
         table_new = eliminate_trends_in_residuals(
             self.temperature_correction_data,
-            load_clock_offset_table(self.clock_offset_file), self.gtis,
+            load_clock_offset_table(
+                self.clock_offset_file, shift_non_malindi=True), self.gtis,
             debug=False)
         table_new['temp_corr_nodetrend'] = table_new['temp_corr']
         table_new['temp_corr'] = table_new['temp_corr_detrend']
@@ -876,7 +883,6 @@ class ClockCorrection():
 
         good, _ = get_malindi_data_except_when_out(clock_offset_table) & ~clock_offset_table['flag']
 
-        # print(clock_residuals_detrend, clock_residuals_detrend.size)
         roll_std = residual_roll_std(clock_residuals_detrend[good])
         control_points = clock_offset_table['met'][good]
         clock_err_fun = interp1d(control_points, roll_std,
@@ -1540,8 +1546,9 @@ def main_create_clockfile(args=None):
                                save_nodetrend=args.save_nodetrend,
                                shift_times=args.shift_times)
 
+    clock_offset_table = read_clock_offset_table(args.offsets)
     plot = plot_scatter(Table.read(args.outfile, hdu="NU_FINE_CLOCK"),
-                        clockcorr.clock_offset_table,
+                        clock_offset_table,
                         shift_times=args.shift_times)
     from bokeh.io import output_file, save, show
     outfig = args.outfile.replace(".gz", "").replace(".fits", "")

@@ -53,7 +53,10 @@ def recalc(outfile='save_all.pickle'):
          f"Mode: {aobs['OBSERVATION_MODE']}<br>")
         for aobs in all_nustar_obs]
 
-    clock_offset_table = load_and_flag_clock_table(clockfile=CLOCKFILE)
+    clock_offset_table = \
+        load_and_flag_clock_table(clockfile=CLOCKFILE, shift_non_malindi=False)
+    clock_offset_table_corr = \
+        load_and_flag_clock_table(clockfile=CLOCKFILE, shift_non_malindi=True)
 
     table_times = temptable_raw['met']
     met_start = table_times[0]
@@ -71,7 +74,7 @@ def recalc(outfile='save_all.pickle'):
         time_resolution=10, craig_fit=False, hdf_dump_file='dump.hdf5')
 
     table_new = eliminate_trends_in_residuals(
-        table_new, clock_offset_table, gtis)
+        table_new, clock_offset_table_corr, gtis)
 
     mets = np.array(table_new['met'])
     start = mets[0]
