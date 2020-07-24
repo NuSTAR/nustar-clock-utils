@@ -41,8 +41,7 @@ def format_profile_and_get_phase(file, template=None):
     if template is not None:
         # plt.axvline(local_max, color='k', lw=0.5, alpha=alpha)
         mean_amp, std_amp, phase_res, phase_res_err = \
-            fftfit(prof, template=template, quick=False,
-                   use_bootstrap=False)
+            fftfit(prof, template=template)
     else:
         phase_res = local_max
         phase_res_err = 1 / prof.size

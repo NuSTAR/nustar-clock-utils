@@ -71,8 +71,7 @@ def chi_sq_alt(b, tau, P, S, theta, phi, ngood=20):
     return res
 
 
-def fftfit(prof, template, quick=False, sigma=None, use_bootstrap=False,
-           **fftfit_kwargs):
+def fftfit(prof, template):
     """Align a template to a pulse profile.
 
     Parameters
@@ -82,14 +81,6 @@ def fftfit(prof, template, quick=False, sigma=None, use_bootstrap=False,
     template : array, default None
         The template of the pulse used to perform the TOA calculation. If None,
         a simple sinusoid is used
-
-    Other parameters
-    ----------------
-    sigma : array
-        error on profile bins (currently has no effect)
-    use_bootstrap : bool
-        Calculate errors using a bootstrap method, with `fftfit_error`
-    **fftfit_kwargs : additional arguments for `fftfit_error`
 
     Returns
     -------
@@ -102,21 +93,11 @@ def fftfit(prof, template, quick=False, sigma=None, use_bootstrap=False,
 
     nbin = len(prof)
 
-    ph = np.arange(0, 1, 1 / nbin)
-
     template = template - np.mean(template)
-
-    dph = normalize_phase_0d5(
-        float((np.argmax(prof) - np.argmax(template)) / nbin))
-
-    factor = np.max(template) / np.max(prof)
-
-    binsize = 1 / nbin
 
     temp_ft = np.fft.fft(template)
     prof_ft = np.fft.fft(prof)
     freq = np.fft.fftfreq(prof.size)
-    # good = freq >= 0
     good = freq == freq
 
     P = np.abs(prof_ft[good])
