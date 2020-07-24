@@ -11,7 +11,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import Angle
 import nuclockutils
-from .utils import filter_with_region
+from .utils import filter_with_region, high_precision_keyword_read
 from .nustarclock import interpolate_clock_function
 
 
@@ -26,7 +26,7 @@ def get_orbital_functions(orbfile):
     from astropy.time import Time
     import astropy.units as u
     orbtable = Table.read(orbfile)
-    mjdref = orbtable.meta['MJDREFF'] + orbtable.meta['MJDREFI']
+    mjdref = high_precision_keyword_read(orbtable.meta, 'MJDREF')
 
     times = Time(np.array(orbtable['TIME'] / 86400 + mjdref), format='mjd')
     if 'GEODETIC' in orbtable.colnames:
@@ -81,7 +81,7 @@ def get_dummy_parfile_for_position(orbfile):
 def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
     no = NuSTARObs(name="NuSTAR", FPorbname=orbfile, tt2tdb_mode="pint")
     with fits.open(orbfile) as hdul:
-        mjdref = hdul[1].header['MJDREFI'] + hdul[1].header['MJDREFF']
+        mjdref = high_precision_keyword_read(hdul[1].header, 'MJDREF')
 
     mjds = np.arange(no.X.x[1], no.X.x[-2], dt / 86400)
     mets = (mjds - mjdref) * 86400
@@ -138,6 +138,8 @@ def apply_clock_correction(
             clock_corr, _ = interpolate_clock_function(clocktable, times)
             clock_fun = interp1d(times, clock_corr,
                 assume_sorted=True, bounds_error=False, fill_value='extrapolate')
+        elif clockfile is not None and not os.path.exists(clockfile):
+            raise FileNotFoundError(f"Clock file {clockfile} not found")
 
         for hdu in hdul:
             log.info(f"Updating HDU {hdu.name}")
