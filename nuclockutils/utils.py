@@ -5,6 +5,7 @@ from astropy.table import Table
 from astroquery.heasarc import Heasarc
 from astropy.time import Time
 from scipy.interpolate import LSQUnivariateSpline
+from numba import vectorize
 
 
 NUSTAR_MJDREF = np.longdouble("55197.00076601852")
@@ -539,6 +540,43 @@ def filter_dict_with_re(dictionary, regex):
     return new_dict
 
 
+@vectorize(
+    "float64(float64, float64, float64, float64, float64, float64, float64)")
+def _cubic_interpolation(x, xtab0, xtab1, ytab0, ytab1, yptab0, yptab1):
+    """Cubic interpolation of tabular data.
+
+    Translated from the cubeterp function in seekinterp.c,
+    distributed with HEASOFT.
+
+    Given a tabulated abcissa at two points xtab[] and a tabulated
+    ordinate ytab[] (+derivative yptab[]) at the same abcissae, estimate
+    the ordinate and derivative at requested point "x"
+
+    Works for numbers or arrays for x. If x is an array,
+    xtab, ytab and yptab are arrays of shape (2, x.size).
+    """
+    dx = x - xtab0
+    # Distance between adjoining tabulated abcissae and ordinates
+    xs = xtab1 - xtab0
+    ys = ytab1 - ytab0
+
+    # Rescale or pull out quantities of interest
+    dx = dx / xs  # Rescale DX
+    y0 = ytab0  # No rescaling of Y - start of interval
+    yp0 = yptab0 * xs  # Rescale tabulated derivatives - start of interval
+    yp1 = yptab1 * xs  # Rescale tabulated derivatives - end of interval
+
+    # Compute polynomial coefficients
+    a = y0
+    b = yp0
+    c = 3 * ys - 2 * yp0 - yp1
+    d = yp0 + yp1 - 2 * ys
+
+    # Perform cubic interpolation
+    yint = a + dx * (b + dx * (c + dx * d))
+    return yint
+
+
 def cubic_interpolation(x, xtab, ytab, yptab):
     """Cubic interpolation of tabular data.
 
@@ -552,24 +590,52 @@ def cubic_interpolation(x, xtab, ytab, yptab):
     Works for numbers or arrays for x. If x is an array,
     xtab, ytab and yptab are arrays of shape (2, x.size).
     """
+    return _cubic_interpolation(
+        x, xtab[0], xtab[1], ytab[0], ytab[1], yptab[0], yptab[1])
 
-    dx = x - xtab[0]
-    # Distance between adjoining tabulated abcissae and ordinates
-    xs = xtab[1] - xtab[0]
-    ys = ytab[1] - ytab[0]
 
-    # Rescale or pull out quantities of interest
-    dx = dx / xs  # Rescale DX
-    y0 = ytab[0]  # No rescaling of Y - start of interval
-    yp0 = yptab[0] * xs  # Rescale tabulated derivatives - start of interval
-    yp1 = yptab[1] * xs  # Rescale tabulated derivatives - end of interval
+def high_precision_keyword_read(hdr, keyword):
+    """Read FITS header keywords, also if split in two.
 
-    # Compute polynomial coefficients
-    a = y0
-    b = yp0
-    c = 3 * ys - 2 * yp0 - yp1
-    d = yp0 + yp1 - 2 * ys
+    In the case where the keyword is split in two, like
 
-    # Perform cubic interpolation
-    yint = a + dx * (b + dx * (c + dx * d))
-    return yint
+        MJDREF = MJDREFI + MJDREFF
+
+    in some missions, this function returns the summed value. Otherwise, the
+    content of the single keyword
+
+    Parameters
+    ----------
+    hdr : dict_like
+        The header structure, or a dictionary
+    keyword : str
+        The key to read in the header
+
+    Returns
+    -------
+    value : long double
+        The value of the key, or None if keyword not present
+
+    Examples
+    --------
+    >>> hdr = dict(keywordS=1.25)
+    >>> high_precision_keyword_read(hdr, 'keywordS')
+    1.25
+    >>> hdr = dict(keywordI=1, keywordF=0.25)
+    >>> high_precision_keyword_read(hdr, 'keywordS')
+    1.25
+    >>> high_precision_keyword_read(hdr, 'bubabuab') is None
+    True
+    """
+    if keyword in hdr:
+        return np.longdouble(hdr[keyword])
+
+    if len(keyword) == 8:
+        keyword = keyword[:7]
+
+    if keyword + 'I' in hdr and keyword + 'F' in hdr:
+        value_i = np.longdouble(hdr[keyword + 'I'])
+        value_f = np.longdouble(hdr[keyword + 'F'])
+        return value_i + value_f
+    else:
+        return None
