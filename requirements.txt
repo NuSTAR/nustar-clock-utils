@@ -1,10 +1,11 @@
 numpy
 scipy
-astropy
+astropy>=3.2,!=4.0.1,!=4.0.1.post1
 matplotlib
 pandas
 sklearn
-git+https://github.com/nanograv/pint.git@e5f6b260422898f63c88d636712fcc1cdd76cf20
+pint-pulsar
+#git+https://github.com/nanograv/pint.git@e5f6b260422898f63c88d636712fcc1cdd76cf20
 tqdm
 jplephem
 datashader
@@ -12,4 +13,5 @@ bokeh
 holoviews
 statsmodels
 h5py
+astroquery
 
