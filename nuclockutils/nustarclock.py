@@ -1,6 +1,7 @@
 import glob
 import os
 import shutil
+from functools import lru_cache
 
 import numpy as np
 from astropy.table import Table, vstack
@@ -11,7 +12,9 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 from .utils import NUSTAR_MJDREF, splitext_improved, sec_to_mjd
-from .utils import filter_with_region
+from .utils import filter_with_region, fix_byteorder, rolling_std
+from .utils import measure_overall_trend, cross_two_gtis, get_rough_trend_fun
+from .utils import spline_through_data, cubic_interpolation, robust_poly_fit
 from astropy.io import fits
 import tqdm
 from astropy import log
@@ -20,39 +23,333 @@ import copy
 import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews import opts
+# import matplotlib.pyplot as plt
 
 hv.extension('bokeh')
 
 curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
-ALL_BAD_POINTS = np.genfromtxt(os.path.join(datadir, 'BAD_POINTS_DB.dat'),
-                               dtype=np.longdouble)
 
 
-def get_rolling_std(clock_residuals_detrend,
-                    clock_offset_table, window=20 * 86400):
+def get_bad_points_db(db_file='BAD_POINTS_DB.dat'):
+    if not os.path.exists(db_file):
+        db_file = os.path.join(datadir, 'BAD_POINTS_DB.dat')
+
+    return np.genfromtxt(db_file, dtype=np.longdouble)
+
+
+def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
+    """
+
+    Examples
+    --------
+    >>> db_file = 'dummy_bad_points.dat'
+    >>> np.savetxt(db_file, np.array([-1, 3, 10]))
+    >>> all_data = Table({'met': [0, 1, 2, 3, 4]})
+    >>> all_data = flag_bad_points(all_data, db_file='dummy_bad_points.dat')
+    INFO: ...
+    >>> np.all(all_data['flag'] == [False, False, False, True, False])
+    True
+    """
+    if not os.path.exists(db_file):
+        return all_data
+    log.info("Flagging bad points...")
+
+    intv = [all_data['met'][0] - 0.5, all_data['met'][-1] + 0.5]
+    ALL_BAD_POINTS = np.genfromtxt(db_file)
+    ALL_BAD_POINTS.sort()
+    ALL_BAD_POINTS = np.unique(ALL_BAD_POINTS)
+    ALL_BAD_POINTS = ALL_BAD_POINTS[
+        (ALL_BAD_POINTS > intv[0]) & (ALL_BAD_POINTS < intv[1])]
+
+    idxs = all_data['met'].searchsorted(ALL_BAD_POINTS)
+
+    if 'flag' in all_data.colnames:
+        mask = np.array(all_data['flag'], dtype=bool)
+    else:
+        mask = np.zeros(len(all_data), dtype=bool)
+
+    for idx in idxs:
+        if idx >= mask.size:
+            continue
+        mask[idx] = True
+    all_data['flag'] = mask
+    return all_data
+
+
+def find_good_time_intervals(temperature_table,
+                             clock_jump_times=None):
+    start_time = temperature_table['met'][0]
+    stop_time = temperature_table['met'][-1]
+
+    clock_gtis = no_jump_gtis(
+        start_time, stop_time, clock_jump_times)
+
+    if not 'gti' in temperature_table.meta:
+        temp_gtis = temperature_gtis(temperature_table)
+    else:
+        temp_gtis = temperature_table.meta['gti']
+
+    gtis = cross_two_gtis(temp_gtis, clock_gtis)
+
+    return gtis
+
+
+def calculate_stats(all_data):
+    log.info("Calculating statistics")
+    r_std = residual_roll_std(all_data['residual_detrend'])
+
+    scatter = mad(all_data['residual_detrend'])
+    print()
+    print("----------------------------- Stats -----------------------------------")
+    print()
+    print(f"Overall MAD: {scatter * 1e6:.0f} us")
+    print(f"Minimum scatter: ±{np.min(r_std) * 1e6:.0f} us")
+    print()
+    print("-----------------------------------------------------------------------")
+
+
+def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=False):
+    clock_offset_table = load_clock_offset_table(clockfile,
+                                                 shift_non_malindi=shift_non_malindi)
+    clock_offset_table = flag_bad_points(
+        clock_offset_table, db_file='BAD_POINTS_DB.dat')
+    return clock_offset_table
+
+
+def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
+    tempcorr_idx = np.searchsorted(temptable['met'], clock_offset_table['met'])
+    clock_residuals = \
+        np.array(clock_offset_table['offset'] -
+                 temptable['temp_corr'][tempcorr_idx])
+
+    if outlier_cuts is not None:
+        log.info("Cutting outliers...")
+        better_points = np.array(clock_residuals == clock_residuals,
+                                 dtype=bool)
+
+        for i, cut in enumerate(outlier_cuts):
+            mm = median_filter(clock_residuals, 11)
+            wh = ((clock_residuals[better_points] - mm[better_points]) < outlier_cuts[
+                i]) | ((clock_residuals[better_points] - mm[better_points]) <
+                       outlier_cuts[0])
+            better_points[better_points] = ~wh
+        clock_offset_table = clock_offset_table[better_points]
+        clock_residuals = clock_residuals[better_points]
+
+    detrend_fun = spline_through_data(clock_offset_table['met'],
+                                      clock_residuals, downsample=4)
+
+    r_std = residual_roll_std(
+        clock_residuals - detrend_fun(clock_offset_table['met']))
+
+    clidx = np.searchsorted(clock_offset_table['met'], temptable['met'])
+    clidx[clidx == clock_offset_table['met'].size] = \
+        clock_offset_table['met'].size - 1
+
+    temptable['std'] = r_std[clidx]
+    temptable['temp_corr_trend'] = detrend_fun(temptable['met'])
+    temptable['temp_corr_detrend'] = \
+        temptable['temp_corr'] + temptable['temp_corr_trend']
+
+    return temptable
+
+
+def eliminate_trends_in_residuals(temp_table, clock_offset_table,
+                                  gtis, debug=False):
+
+    good = clock_offset_table['met'] < np.max(temp_table['met'])
+    clock_offset_table = clock_offset_table[good]
+    temp_table['temp_corr_raw'] = temp_table['temp_corr']
+
+    tempcorr_idx = np.searchsorted(temp_table['met'],
+                                   clock_offset_table['met'])
+
+    clock_residuals = \
+        clock_offset_table['offset'] - temp_table['temp_corr'][tempcorr_idx]
+
+    use_for_interpol, bad_malindi_time = \
+        get_malindi_data_except_when_out(clock_offset_table)
+
+    clock_residuals[bad_malindi_time] -= 0.0005
+
+    good = (clock_residuals == clock_residuals) & ~clock_offset_table['flag'] & use_for_interpol
+
+    clock_offset_table = clock_offset_table[good]
+    clock_residuals = clock_residuals[good]
+
+    for g in gtis:
+        log.info(f"Treating data from METs {g[0]}--{g[1]}")
+        start, stop = g
+
+        cl_idx_start, cl_idx_end = \
+            np.searchsorted(clock_offset_table['met'], g)
+
+        if cl_idx_end - cl_idx_start == 0:
+            continue
+
+        temp_idx_start, temp_idx_end = \
+            np.searchsorted(temp_table['met'], g)
+
+        table_new = temp_table[temp_idx_start:temp_idx_end]
+        cltable_new = clock_offset_table[cl_idx_start:cl_idx_end]
+        met = cltable_new['met']
+        residuals = clock_residuals[cl_idx_start:cl_idx_end]
+        met0 = met[0]
+        met_rescale = (met - met0)/(met[-1] - met0)
+        _, m, q = measure_overall_trend(met_rescale, residuals)
+        # p_new = get_rough_trend_fun(met, residuals)
+        #
+        # if p_new is not None:
+        #     p = p_new
+        poly_order = min(met.size // 300 + 1, 10)
+        p0 = np.zeros(poly_order + 1)
+        p0[0] = q
+        if p0.size > 1:
+            p0[1] = m
+        log.info(f"Fitting a polinomial of order {poly_order}")
+        p = robust_poly_fit(met_rescale, residuals, order=poly_order,
+                            p0=p0)
+        # if poly_order >=2:
+        import matplotlib.pyplot as plt
+        # plt.figure()
+        # plt.plot(met_rescale, residuals)
+        # plt.plot(met_rescale, p(met_rescale))
+        # plt.plot(met_rescale, m * (met_rescale) + q)
+
+        table_mets_rescale = (table_new['met'] - met0) / (met[-1] - met0)
+        corr = p(table_mets_rescale)
+
+        sub_residuals = residuals - p(met_rescale)
+        m = (sub_residuals[-1] - sub_residuals[0]) / (met_rescale[-1] - met_rescale[0])
+        q = sub_residuals[0]
+
+        # plt.plot(table_mets_rescale, corr + m * (table_mets_rescale - met_rescale[0]) + q, lw=2)
+
+        corr = corr + m * (table_mets_rescale - met_rescale[0]) + q
+        table_new['temp_corr'] += corr
+
+        if debug:
+            import matplotlib.pyplot as plt
+            fig = plt.figure()
+            plt.plot(table_new['met'], table_new['temp_corr'], alpha=0.5)
+            plt.scatter(cltable_new['met'], cltable_new['offset'])
+            plt.plot(table_new['met'], table_new['temp_corr'])
+            plt.savefig(f'{int(start)}--{int(stop)}_detr.png')
+            plt.close(fig)
+        # plt.show()
+
+        # print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
+
+    btis = np.array(
+        [[g0, g1] for g0, g1 in zip(gtis[:-1, 1], gtis[1:, 0])])
+
+    # Interpolate the solution along bad time intervals
+    for g in btis:
+        start, stop = g
+        log.info(f"Treating bad data from METs {start}--{stop}")
+
+        temp_idx_start, temp_idx_end = \
+            np.searchsorted(temp_table['met'], g)
+        if temp_idx_end - temp_idx_start == 0:
+            continue
+        table_new = temp_table[temp_idx_start:temp_idx_end]
+        cl_idx_start, cl_idx_end = \
+            np.searchsorted(clock_offset_table['met'], g)
+        local_clockoff = clock_offset_table[cl_idx_start - 1:cl_idx_end + 1]
+        last_good_tempcorr = temp_table['temp_corr'][temp_idx_start - 1]
+        next_good_tempcorr = temp_table['temp_corr'][temp_idx_end + 1]
+        last_good_time = temp_table['met'][temp_idx_start - 1]
+        next_good_time = temp_table['met'][temp_idx_end + 1]
+
+        if cl_idx_end - cl_idx_start < 2:
+            log.info("Not enough good clock measurements. Interpolating")
+            m = (next_good_tempcorr - last_good_tempcorr) / \
+              (next_good_time - last_good_time)
+            q = last_good_tempcorr
+            table_new['temp_corr'][:] = \
+                q + (table_new['met'] - last_good_time) * m
+            continue
+
+        clock_off = local_clockoff['offset']
+        clock_tim = local_clockoff['met']
+
+        clock_off = np.concatenate(
+            ([last_good_tempcorr], clock_off, [next_good_tempcorr]))
+        clock_tim = np.concatenate(
+            ([last_good_time], clock_tim, [next_good_time]))
+        order = np.argsort(clock_tim)
+
+        clock_off_fun = interp1d(
+            clock_tim[order], clock_off[order], kind='linear', assume_sorted=True)
+        table_new['temp_corr'][:] = clock_off_fun(table_new['met'])
+
+    log.info("Final detrending...")
+    table_new = spline_detrending(
+        clock_offset_table, temp_table,
+        outlier_cuts=[-0.002, -0.001, -0.0006, -0.0004])
+
+    return table_new
+
+
+def residual_roll_std(residuals, window=30):
+    """
+
+    Examples
+    --------
+    >>> residuals = np.zeros(5000)
+    >>> residuals[:4000] = np.random.normal(0, 1, 4000)
+    >>> roll_std = residual_roll_std(residuals, window=500)
+    >>> np.allclose(roll_std[:3500], 1., rtol=0.2)
+    True
+    >>> np.all(roll_std[4500:] == 0.)
+    True
+    """
+    r_std = rolling_std(np.diff(residuals), window) / np.sqrt(2)
+    return np.concatenate(([r_std[:1], r_std]))
+
+
+def get_malindi_data_except_when_out(clock_offset_table):
+    """Select offset measurements from Malindi, unless Malindi is out.
+
+    In the time interval between METs 93681591 and 98051312, Malindi was out
+    of work. For that time interval, we use all clock offset measurements
+    available. In all other cases, we just use Malindi
+
+    Parameters
+    ----------
+    clock_offset_table : :class:`Table` object
+        Table containing the clock offset measurements. At least, it has to
+        contain a 'met' and a 'station' columns.
+
+    Returns
+    -------
+    use_for_interpol : array of ``bool``
+        Mask of "trustworthy" time measurements
+    bad_malindi_time : array of ``bool``
+        Mask of time measurements during Malindi outage
+
+    Example
+    -------
+    >>> clocktable = Table({'met': [93681592, 1e8, 1.5e8],
+    ...                     'station': ['SNG', 'MLD', 'UHI']})
+    >>> ufp, bmt = get_malindi_data_except_when_out(clocktable)
+    >>> assert np.all(ufp == [True, True, False])
+    >>> assert np.all(bmt == [True, False, False])
+    """
+    no_malindi_intvs = [[93681591, 98051312]]
+    clock_mets = clock_offset_table['met']
+
+    bad_malindi_time = np.zeros(len(clock_mets), dtype=bool)
+    for nmi in no_malindi_intvs:
+        bad_malindi_time = bad_malindi_time | (clock_mets >= nmi[0]) & (
+                    clock_mets < nmi[1])
+
     malindi_stn = clock_offset_table['station'] == 'MLD'
-    detrended_not_nan = clock_residuals_detrend == clock_residuals_detrend
     use_for_interpol = \
-        malindi_stn & ~clock_offset_table['flag'] & detrended_not_nan
-    overlap = 0.1
+        (malindi_stn | bad_malindi_time)
 
-    clstart = clock_offset_table['met'][0]
-    clstop = clock_offset_table['met'][-1]
-
-    control_points = np.arange(clstart, clstop + window, window * overlap)
-    rolling_std = np.zeros_like(control_points)
-
-    times_to_search = clock_offset_table['met'][use_for_interpol]
-    res_to_search = clock_residuals_detrend[use_for_interpol]
-
-    for i, t in enumerate(control_points):
-        s, e = t - window / 2, t + window / 2
-        s_idx, e_idx = np.searchsorted(times_to_search, s), \
-                       np.searchsorted(times_to_search, e)
-        rolling_std[i] = mad(res_to_search[s_idx:e_idx])
-    return control_points, rolling_std
-
+    return use_for_interpol, bad_malindi_time
 
 
 def _look_for_temptable():
@@ -121,7 +418,7 @@ def _look_for_freq_change_file():
     return fchange_files[-1]
 
 
-def read_clock_offset_table(clockoffset_file=None):
+def read_clock_offset_table(clockoffset_file=None, shift_non_malindi=False):
     """
     Parameters
     ----------
@@ -139,15 +436,20 @@ def read_clock_offset_table(clockoffset_file=None):
                                     format='csv', delimiter=' ',
                                     names=['uxt', 'met', 'offset', 'divisor',
                                            'station'])
+    if shift_non_malindi:
+        log.info("Shifting non-Malindi clock offsets down by 0.5 ms")
+        all_but_malindi = clock_offset_table['station'] != 'MLD'
+        clock_offset_table['offset'][all_but_malindi] -= 0.0005
     clock_offset_table['mjd'] = sec_to_mjd(clock_offset_table['met'])
     clock_offset_table.remove_row(len(clock_offset_table) - 1)
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
     log.info("Flagging bad points...")
+    ALL_BAD_POINTS = get_bad_points_db()
+
     for b in ALL_BAD_POINTS:
         nearest = np.argmin(np.abs(clock_offset_table['met'] - b))
         if np.abs(clock_offset_table['met'][nearest] - b) < 1:
-            #             print(f"Removing clock offset at time {b}")
             clock_offset_table['flag'][nearest] = True
 
     return clock_offset_table
@@ -166,8 +468,65 @@ FREQ_CHANGE_DB= {"delete": [77509247, 78720802],
                          (1174759273, 228420058, 24000334)]}
 
 
-def read_freq_changes_table(freqchange_file=None, filter_bad=True):
+def no_jump_gtis(start_time, stop_time, clock_jump_times=None):
     """
+    Examples
+    --------
+    >>> gtis = no_jump_gtis(0, 3, [1, 1.1])
+    >>> np.allclose(gtis, [[0, 1], [1, 1.1], [1.1, 3]])
+    True
+    >>> gtis = no_jump_gtis(0, 3)
+    >>> np.allclose(gtis, [[0, 3]])
+    True
+    """
+    if clock_jump_times is None:
+        return [[start_time, stop_time]]
+
+    clock_gtis = []
+    current_start = start_time
+    for jump in clock_jump_times:
+        clock_gtis.append([current_start, jump])
+        current_start = jump
+    clock_gtis.append([current_start, stop_time])
+    clock_gtis = np.array(clock_gtis)
+    return clock_gtis
+
+
+def temperature_gtis(temperature_table, max_distance=600):
+    """
+
+    Examples
+    --------
+    >>> temperature_table = Table({'met': [0, 1, 2, 10, 11, 12]})
+    >>> gti = temperature_gtis(temperature_table, 5)
+    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    True
+    >>> temperature_table = Table({'met': [-10, 0, 1, 2, 10, 11, 12, 20]})
+    >>> gti = temperature_gtis(temperature_table, 5)
+    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    True
+    """
+    temp_condition = np.concatenate(
+        ([False], np.diff(temperature_table['met']) > max_distance, [False]))
+
+    temp_edges_l = np.concatenate((
+        [temperature_table['met'][0]],
+        temperature_table['met'][temp_condition[:-1]]))
+
+    temp_edges_h = np.concatenate((
+        [temperature_table['met'][temp_condition[1:]],
+         [temperature_table['met'][-1]]]))
+
+    temp_gtis = np.array(list(zip(
+        temp_edges_l, temp_edges_h)))
+
+    length = temp_gtis[:, 1] - temp_gtis[:, 0]
+    return temp_gtis[length > 0]
+
+
+def read_freq_changes_table(freqchange_file=None, filter_bad=True):
+    """Read the table with the list of commanded divisor frequencies.
+
     Parameters
     ----------
     freqchange_file : str
@@ -199,7 +558,6 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
         np.abs(freq_changes_table['divisor'] - 2.400034e7) > 20
     if filter_bad:
         freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
-
 
     return freq_changes_table
 
@@ -331,7 +689,7 @@ def interpolate_temptable(temptable, dt=10):
 
 
 def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
-                   dt=None):
+                   dt=None, gti_tolerance=600):
     if temperature_file is None:
         temperature_file = _look_for_temptable()
     log.info(f"Reading temperature_information from {temperature_file}")
@@ -341,24 +699,61 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     elif ext in ['.hk', '.hk.gz']:
         temptable = read_fits_temptable(temperature_file)
     elif ext in ['.hdf5', '.h5']:
-        return read_saved_temptable(mjdstart, mjdstop,
-                                    temperature_file)
+        temptable = read_saved_temptable(mjdstart, mjdstop,
+                                         temperature_file)
+        temptable = fix_byteorder(temptable)
     else:
         raise ValueError('Unknown format for temperature file')
 
+    temp_gtis = temperature_gtis(temptable, gti_tolerance)
     if dt is not None:
         temptable = interpolate_temptable(temptable, dt)
     else:
         good = np.diff(temptable['met']) > 0
         good = np.concatenate((good, [True]))
         temptable = temptable[good]
+    temptable.meta['gti'] = temp_gtis
 
-    window = np.median(310 / np.diff(temptable['met']))
+    window = np.median(1000 / np.diff(temptable['met']))
     window = int(window // 2 * 2 + 1)
+    log.info(f"Smoothing temperature with a window of {window} points")
     temptable['temperature_smooth'] = \
-        savgol_filter(temptable['temperature'], window, 2)
+        savgol_filter(temptable['temperature'], window, 3)
+    temptable['temperature_smooth_gradient'] = \
+        np.gradient(temptable['temperature_smooth'], temptable['met'],
+                    edge_order=2)
 
     return temptable
+
+
+@lru_cache(maxsize=64)
+def load_temptable(temptable_name):
+    log.info(f"Reading data from {temptable_name}")
+    IS_CSV = temptable_name.endswith('.csv')
+    hdf5_name = temptable_name.replace('.csv', '.hdf5')
+
+    if IS_CSV and os.path.exists(hdf5_name):
+        IS_CSV = False
+        temptable_raw = read_temptable(hdf5_name)
+    else:
+        temptable_raw = read_temptable(temptable_name)
+
+    if IS_CSV:
+        log.info(f"Saving temperature data to {hdf5_name}")
+        temptable_raw.write(hdf5_name, overwrite=True)
+    return temptable_raw
+
+
+@lru_cache(maxsize=64)
+def load_freq_changes(freq_change_file):
+    log.info(f"Reading data from {freq_change_file}")
+    return read_freq_changes_table(freq_change_file)
+
+
+@lru_cache(maxsize=64)
+def load_clock_offset_table(clock_offset_file, shift_non_malindi=False):
+    return read_clock_offset_table(clock_offset_file,
+                                   shift_non_malindi=shift_non_malindi)
 
 
 class ClockCorrection():
@@ -406,7 +801,13 @@ class ClockCorrection():
         self.plot_file = label + "_clock_adjustment.png"
         self.clock_offset_file = clock_offset_file
         self.clock_offset_table = \
-            read_clock_offset_table(self.clock_offset_file)
+            read_clock_offset_table(self.clock_offset_file,
+                                    shift_non_malindi=True)
+
+        self.clock_jump_times = \
+            np.array([78708320, 79657575, 81043985, 82055671, 293346772])
+        self.gtis = find_good_time_intervals(
+            self.temptable, self.clock_jump_times)
 
         self.temperature_correction_data = \
             temperature_correction_table(
@@ -449,113 +850,29 @@ class ClockCorrection():
                         fill_value="extrapolate", bounds_error=False)
 
     def adjust_temperature_correction(self):
-        import copy
-        table = self.temperature_correction_data
-        table_new = copy.deepcopy(table)
-        mets = np.array(table_new['met'])
-
-        start = mets[0]
-        stop = mets[-1]
-        clock_offset_table = read_clock_offset_table(self.clock_offset_file)
-        clock_mets = clock_offset_table['met']
-
-        jump_times = np.array([78708320, 79657575, 81043985, 82055671])
-        jump_times = jump_times[(jump_times >= start) & (jump_times < stop)]
-        jumpidx = np.searchsorted(table_new['met'], jump_times)
-        cljumpidx = np.searchsorted(clock_offset_table['met'], jump_times)
-
-        for clidx, idx in zip(cljumpidx, jumpidx):
-            jump = clock_offset_table['offset'][clidx + 1] - \
-                   clock_offset_table['offset'][clidx]
-            table_new['temp_corr'][:idx] -= jump  # - corrjump
-
-        good = table_new['temp_corr'] == table_new['temp_corr']
-        table_new = table_new[good]
-
-        tempcorr_idx = np.searchsorted(table_new['met'],
-                                       clock_offset_table['met'])
-
-        tempcorr_idx[tempcorr_idx >= table_new['met'].size] = table_new['met'].size -1
-
-        clock_residuals = clock_offset_table['offset'] - \
-                          table_new['temp_corr'][tempcorr_idx]
-
-        good = clock_residuals == clock_residuals
-        if len(clock_offset_table['met']) > 100:
-            z = np.polyfit(clock_offset_table['met'][good],
-                           clock_residuals[good], 1)
-            p = np.poly1d(z)
-        else:
-            fit_result = robust_linear_fit(clock_offset_table['met'][good],
-                                           clock_residuals[good])
-            m, q = fit_result.estimator_.coef_, \
-                   fit_result.estimator_.intercept_
-
-            def p(times):
-                return times * m + q
-
-        print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
-
-        table_new['temp_corr'] += p(table_new['met'])
-
-        clock_residuals = clock_offset_table['offset'] - \
-                          table_new['temp_corr'][tempcorr_idx]
-
-        smooth = median_filter(clock_residuals, 21)
-        diffs = clock_residuals - smooth
-        surelybad = np.logical_or(diffs < -50, diffs > 80)
-        no_malindi_intvs = [[93681591, 98051312]]
-        bad_malindi_time = np.zeros(len(clock_mets), dtype=bool)
-        for nmi in no_malindi_intvs:
-            bad_malindi_time = bad_malindi_time | (clock_mets >= nmi[0]) & (
-                        clock_mets < nmi[1])
-
-        # For bad Malindi Times, we use clock offsets minus half a millisecond
-        clock_offset_table[bad_malindi_time]['offset'] -= 0.0005
-
-        malindi_stn = clock_offset_table['station'] == 'MLD'
-        use_for_interpol = \
-            (malindi_stn | bad_malindi_time) & ~clock_offset_table[
-                'flag'] & ~surelybad
-
-        good_clock_mets = clock_mets[use_for_interpol]
-        good_diffs = clock_residuals[use_for_interpol]
-
-        # running_median = median_filter(good_diffs, 11)
-        # better_points = np.abs(good_diffs - running_median) < 0.001
-        mscuts = [-0.002, -0.001, -0.0006, -0.0004]
-
-        better_points = np.array(good_diffs == good_diffs, dtype=bool)
-        good_diffs[~better_points] = 0
-
-        for i, cut in enumerate(mscuts):
-            mm = median_filter(good_diffs, 15)
-            wh = ((good_diffs[better_points] - mm[better_points]) < mscuts[
-                i]) | ((good_diffs[better_points] - mm[better_points]) <
-                       mscuts[0])
-            better_points[better_points] = ~wh
-
-        diff_trend = interp1d(good_clock_mets[better_points],
-                              savgol_filter(good_diffs[better_points], 11, 2),
-                              fill_value='extrapolate',
-                              bounds_error=False, assume_sorted=True)
-
-        table_new['temp_corr_detrend'] = \
-            table_new['temp_corr'] + diff_trend(table_new['met'])
-
+        table_new = eliminate_trends_in_residuals(
+            self.temperature_correction_data,
+            load_clock_offset_table(
+                self.clock_offset_file, shift_non_malindi=True), self.gtis,
+            debug=False)
+        table_new['temp_corr_nodetrend'] = table_new['temp_corr']
         table_new['temp_corr'] = table_new['temp_corr_detrend']
         table_new.remove_column('temp_corr_detrend')
 
+        # 'temp_corr_detrend']
         self.temperature_correction_data = table_new
 
-    def write_clock_file(self, filename=None):
+    def write_clock_file(self, filename=None, save_nodetrend=False,
+                         shift_times=0.):
         from astropy.io.fits import Header, HDUList, BinTableHDU, PrimaryHDU
         from astropy.time import Time
 
         if filename is None:
             filename = 'new_clock_file.fits'
-        clock_offset_table = self.clock_offset_table
         table_new = self.temperature_correction_data
+        clock_offset_table = self.clock_offset_table
+        clock_offset_table = clock_offset_table[
+            clock_offset_table['met'] < table_new['met'][-1]]
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
@@ -564,20 +881,51 @@ class ClockCorrection():
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
 
-        control_points, rolling_std = get_rolling_std(clock_residuals_detrend,
-                                                      clock_offset_table)
+        good, _ = get_malindi_data_except_when_out(clock_offset_table) & ~clock_offset_table['flag']
 
-        clock_err_fun = interp1d(control_points, rolling_std, assume_sorted=True,
+        roll_std = residual_roll_std(clock_residuals_detrend[good])
+        control_points = clock_offset_table['met'][good]
+        clock_err_fun = interp1d(control_points, roll_std,
+                                 assume_sorted=True,
                                  bounds_error=False, fill_value='extrapolate')
-        new_clock_table = Table({'TIME': table_new['met'],
-                                 'CLOCK_OFF_CORR': -table_new['temp_corr'],
-                                 'CLOCK_FREQ_CORR': np.gradient(
-                                     -table_new['temp_corr'],
-                                     table_new['met'], edge_order=2),
-                                 'CLOCK_ERR_CORR': clock_err_fun(
-                                     table_new['met'])})
+
+        clockerr = clock_err_fun(table_new['met'])
+
+        btis = np.array(list(zip(self.gtis[:-1, 1], self.gtis[1:, 0])))
+
+        for g in btis:
+            start, stop = g
+            log.info(f"Treating bad data from METs {start}--{stop}")
+
+            temp_idx_start, temp_idx_end = \
+                np.searchsorted(table_new['met'], g)
+            if temp_idx_end - temp_idx_start == 0:
+                continue
+            clockerr[temp_idx_start:temp_idx_end] = 0.001
+
+        new_clock_table = Table(
+            {'TIME': table_new['met'],
+             'CLOCK_OFF_CORR': -table_new['temp_corr'] + shift_times,
+             'CLOCK_FREQ_CORR': np.gradient(
+                 -table_new['temp_corr'],
+                 table_new['met'], edge_order=2),
+             'CLOCK_ERR_CORR': clockerr})
 
         new_clock_table_subsample = new_clock_table[::100]
+        del new_clock_table
+        if save_nodetrend:
+            new_clock_table_nodetrend = Table(
+                {'TIME': table_new['met'],
+                 'CLOCK_OFF_CORR': -table_new['temp_corr_nodetrend'] + shift_times,
+                 'CLOCK_FREQ_CORR': np.gradient(
+                     -table_new['temp_corr'],
+                     table_new['met'], edge_order=2),
+                 'CLOCK_ERR_CORR': clock_err_fun(
+                     table_new['met'])})
+            new_clock_table_subsample_nodetrend = \
+                new_clock_table_nodetrend[::100]
+            del new_clock_table_nodetrend
+
         t = Time.now()
         t.format = 'iso'
         t.out_subfmt = 'date'
@@ -590,7 +938,7 @@ class ClockCorrection():
         tstop = clstop
 
         header = Header()
-        header["XTENSION"] = ('BINTABLE', "Written by IDL")
+        header["XTENSION"] = ('BINTABLE', "Written by Python")
         header["BITPIX"] = (8, "NAXIS   =                    2 /Binary table")
         header["TFIELDS"] = (4, "Number of columns")
         header["EXTNAME"] = ('NU_FINE_CLOCK', "NuSTAR fine clock correction")
@@ -620,6 +968,9 @@ class ClockCorrection():
         header[
             'COMMENT'] = "character at the end of a string which is then continued"
         header['COMMENT'] = "on subsequent keywords whose name = 'CONTINUE'."
+        header['COMMENT'] = ""
+        if shift_times != 0.:
+            header['COMMENT'] = f"A systematic shift of {shift_times} s was applied to the correction"
         header["RADECSYS"] = ('FK5     ', "celestial coord system")
         header["TIMEUNIT"] = ('s       ', "Units of header time keywords")
         header["TASSIGN"] = ('SATELLITE', "Time assigned by onboard clock")
@@ -702,154 +1053,60 @@ class ClockCorrection():
             "on subsequent keywords whose name = 'CONTINUE'."
 
         hdu = BinTableHDU(new_clock_table_subsample, header=header)
+        hdulist = [prihdu, hdu]
+        if save_nodetrend:
+            hdu_nodetrend = \
+                BinTableHDU(new_clock_table_subsample_nodetrend,
+                            header=header, name="NU_FINE_CLOCK_NODETREND")
+            hdulist.append(hdu_nodetrend)
 
-        HDUList([prihdu, hdu]).writeto(filename, overwrite=True)
-
-    def adjust_temperature_correction_old(self):
-        import matplotlib.pyplot as plt
-        data = self.temperature_correction_data
-        times = np.array(data['met'])
-        start = times[0]
-        stop = times[-1]
-
-        clock_offset_table_all, mask = self.load_offset_table(start, stop)
-        clock_offset_table = clock_offset_table_all[mask]
-
-        cltimes = clock_offset_table['met']
-        offsets = clock_offset_table['offset']
-
-        first_clock_idx = np.argmin(np.abs(times - cltimes[0]))
-
-        data['temp_corr_rough'] = np.array(data['temp_corr'])
-
-        data['temp_corr'] = \
-            data['temp_corr_rough'] - data['temp_corr_rough'][first_clock_idx] + \
-            offsets[0]
-
-        fun = interp1d(data['met'], data['temp_corr'], bounds_error=False,
-                       fill_value='extrapolate')
-
-        fit_result = robust_linear_fit(cltimes, fun(cltimes) - offsets)
-        m, q = fit_result.estimator_.coef_, fit_result.estimator_.intercept_
-
-        inlier_mask = fit_result.inlier_mask_
-        outlier_mask = np.logical_not(inlier_mask)
-
-        def fit_function(times, m, q):
-            return fun(times) - (times * m + q)
-
-        if self.plot_file is not None:
-            fig = plt.figure(figsize=(15, 10))
-            gs = plt.GridSpec(2, 1, hspace=0, height_ratios=(3, 2))
-            ax0 = plt.subplot(gs[0])
-            ax1 = plt.subplot(gs[1], sharex=ax0)
-            fine_times = np.arange(start, stop, 100)
-            ax0.scatter(clock_offset_table_all['met'],
-                        clock_offset_table_all['offset'] * 1000, alpha=0.5,
-                        color='k',
-                        label="Discarded offsets (bad)")
-            ax0.scatter(cltimes, offsets * 1000, label="Offsets used for fit")
-            if np.any(outlier_mask):
-                ax0.scatter(cltimes[outlier_mask],
-                            offsets[outlier_mask] * 1000,
-                            color='r', marker='x', s=30, zorder=10,
-                            label="Fit outliers")
-            ax0.plot(fine_times, fun(fine_times) * 1000, alpha=0.5)
-            new_tcorr = fit_function(fine_times, m, q)
-            ax0.plot(fine_times, new_tcorr * 1000)
-            ax0.set_ylabel("Offset (ms)")
-            ax0.grid()
-
-            ax1.scatter(clock_offset_table_all['met'],
-                        1e6 * (clock_offset_table_all['offset'] - fit_function(
-                            clock_offset_table_all['met'], m, q)),
-                        color='k', alpha=0.5)
-            ax1.scatter(cltimes, 1e6 * (offsets - fit_function(cltimes, m, q)))
-            if np.any(outlier_mask):
-                ax1.scatter(cltimes[outlier_mask],
-                            1e6 * (offsets - fit_function(cltimes, m, q))[
-                                outlier_mask],
-                            color='r', marker='x', s=30, zorder=10,
-                            label="Fit outliers")
-
-            ax1.axhline(0)
-            ax1.set_xlabel("MET (s)")
-            ax1.set_ylabel("Residual (us)")
-            ax1.set_ylim((-500, 500))
-            ax1.grid()
-
-            plt.savefig(self.plot_file)
-            plt.close(fig)
-
-        log.info(f"Correcting for a drift of {m} s/s")
-
-        data['temp_corr'] = data['temp_corr'] - (m * times + q)
-        self.temperature_correction_data = data
-        return data
+        HDUList(hdulist).writeto(filename, overwrite=True)
 
 
-def calculate_clock_function(new_clock_table, clock_offset_table):
+def interpolate_clock_function(new_clock_table, mets):
     tab_times = new_clock_table['TIME']
-    clock_mets = clock_offset_table['met']
-    good_mets = (clock_mets > tab_times.min()) & (clock_mets < tab_times.max())
-    clock_offset_table = copy.deepcopy(clock_offset_table[good_mets])
-    clock_mets = clock_offset_table['met']
-    tab_idxs = np.searchsorted(tab_times, clock_mets, side='right') - 1
+    good_mets = (mets > tab_times.min()) & (mets < tab_times.max())
+    mets = mets[good_mets]
+    tab_idxs = np.searchsorted(tab_times, mets, side='right') - 1
 
-    x = clock_mets[:-1]
-    xtab = tab_times[tab_idxs]
-    ytab = new_clock_table['CLOCK_OFF_CORR'][tab_idxs]
-    yptab = new_clock_table['CLOCK_FREQ_CORR'][tab_idxs]
+    clock_off_corr = new_clock_table['CLOCK_OFF_CORR']
+    clock_freq_corr = new_clock_table['CLOCK_FREQ_CORR']
 
-    xtab = [xtab[:-1], xtab[1:]]
-    ytab = [ytab[:-1], ytab[1:]]
-    yptab = [yptab[:-1], yptab[1:]]
+    x = np.array(mets)
+    xtab = [tab_times[tab_idxs], tab_times[tab_idxs + 1]]
+    ytab = [clock_off_corr[tab_idxs], clock_off_corr[tab_idxs + 1]]
+    yptab = [clock_freq_corr[tab_idxs], clock_freq_corr[tab_idxs + 1]]
 
-    dx = x - xtab[0];
-    #     /* Distance between adjoining tabulated abcissae and ordinates */
-    xs = xtab[1] - xtab[0];
-    ys = ytab[1] - ytab[0];
-
-    #     /* Rescale or pull out quantities of interest */
-    dx = dx / xs  # ;             /* Rescale DX */
-    y0 = ytab[0]  # ;           /* No rescaling of Y - start of interval */
-    yp0 = yptab[
-        0]  # ;      /* Rescale tabulated derivatives - start of interval */
-    yp1 = yptab[
-              1] * xs  # ;      /* Rescale tabulated derivatives - end of interval */
-
-    #     /* Compute polynomial coefficients */
-    a = y0;
-    b = yp0;
-    c = 3 * ys - 2 * yp0 - yp1;
-    d = yp0 + yp1 - 2 * ys;
-
-    #     /* Perform cubic interpolation */
-    yint = -a + dx * (b + dx * (c + dx * d))
-    return yint, good_mets
+    return cubic_interpolation(x, xtab, ytab, yptab), good_mets
 
 
-def plot_scatter(new_clock_table, clock_offset_table):
+def plot_scatter(new_clock_table, clock_offset_table, shift_times=0):
     from bokeh.models import HoverTool
-    yint, good_mets = calculate_clock_function(new_clock_table,
-                                               clock_offset_table)
+    yint, good_mets = interpolate_clock_function(new_clock_table,
+                                                 clock_offset_table['met'])
+
+    yint = - yint
     clock_offset_table = clock_offset_table[good_mets]
+    clock_offset_table['offset'] -= shift_times
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
-    clock_residuals_detrend = clock_offset_table['offset'][:-1] - yint
+    clock_residuals_detrend = clock_offset_table['offset'] - yint
 
-    control_points, rolling_std = \
-        get_rolling_std(clock_residuals_detrend, clock_offset_table[:-1],
-                        window=5 * 86400)
+    good, _ = \
+        get_malindi_data_except_when_out(
+            clock_offset_table) & ~clock_offset_table['flag']
 
-    dates = Time(clock_mjds[:-1], format='mjd')
+    roll_std = residual_roll_std(clock_residuals_detrend[good])
+    control_points = clock_offset_table['met'][good]
 
-    all_data = pd.DataFrame({'met': clock_mets[:-1],
-                             'mjd': np.array(clock_mjds[:-1], dtype=int),
+    dates = Time(clock_mjds, format='mjd')
+
+    all_data = pd.DataFrame({'met': clock_mets,
+                             'mjd': np.array(clock_mjds, dtype=int),
                              'doy': dates.strftime("%Y:%j"),
                              'utc': dates.strftime("%Y:%m:%d"),
-                             'offset': clock_offset_table['offset'][:-1],
-                             'station': clock_offset_table['station'][:-1]})
+                             'offset': clock_offset_table['offset'],
+                             'station': clock_offset_table['station']})
     all_data = hv.Dataset(all_data, [('met', 'Mission Epoch Time'),
                                      ('station', 'Ground Station')],
                                     [('offset', 'Clock Offset (s)'),
@@ -869,18 +1126,18 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_0a = hv.Curve(dict(x=clock_mets[:-1], y=yint),
+    plot_0a = hv.Curve(dict(x=clock_mets, y=yint),
                        group='station', label='Clock corr')
+
     plot_0_all = plot_0.opts(opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-0.1, 0.8)) * plot_0a
 
-    all_data_res = pd.DataFrame({'met': clock_mets[:-1],
-                             'mjd': np.array(clock_mjds[:-1], dtype=int),
+    all_data_res = pd.DataFrame({'met': clock_mets,
+                             'mjd': np.array(clock_mjds, dtype=int),
                              'doy': dates.strftime("%Y:%j"),
                              'utc': dates.strftime("%Y:%m:%d"),
                              'residual': clock_residuals_detrend * 1e6,
-                             'station': clock_offset_table['station'][:-1]})
-
+                             'station': clock_offset_table['station']})
 
     # Jump in and save this to disk here:
     all_data_res.to_pickle('all_data_res.pkl')
@@ -895,10 +1152,13 @@ def plot_scatter(new_clock_table, clock_offset_table):
                                  groupby='station').options(
         color_index='station', alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
-    plot_1b = hv.Curve({'x': control_points, 'y': rolling_std * 1e6},
+
+    plot_1b = hv.Curve({'x': new_clock_table['TIME'],
+                        'y': new_clock_table['CLOCK_ERR_CORR'] * 1e6},
                        group='station', label='scatter up').opts(
         opts.Curve(color='k'))
-    plot_1a = hv.Curve({'x': control_points, 'y': -rolling_std * 1e6},
+    plot_1a = hv.Curve({'x': new_clock_table['TIME'],
+                        'y': -new_clock_table['CLOCK_ERR_CORR'] * 1e6},
                        group='station', label='scatter down').opts(
         opts.Curve(color='k'))
 
@@ -906,7 +1166,8 @@ def plot_scatter(new_clock_table, clock_offset_table):
         opts.Scatter(width=900, height=350, tools=[hover])).opts(
                              ylim=(-700, 700)) * plot_1b * plot_1a
 
-    rolling_data = pd.DataFrame({'met':control_points, 'rolling_std':rolling_std*1e6})
+    rolling_data = pd.DataFrame({'met':control_points,
+                                 'rolling_std':roll_std*1e6})
     rolling_data.to_pickle('rolling_data.pkl')
 
     text_top = hv.Div("""
@@ -929,15 +1190,6 @@ def plot_scatter(new_clock_table, clock_offset_table):
 
     return hv.Layout((plot_0_all + text_top) +
                      (plot_1_all + text_bottom)).cols(2)
-
-
-def robust_linear_fit(x, y):
-    from sklearn import linear_model
-    X = x.reshape(-1, 1)
-    # # Robustly fit linear model with RANSAC algorithm
-    ransac = linear_model.RANSACRegressor(residual_threshold=0.0002)
-    ransac.fit(X, y)
-    return ransac
 
 
 class NuSTARCorr():
@@ -1053,15 +1305,20 @@ def clock_ppm_model(nustar_met, temperature, craig_fit=False):
         parameters of the ppm-time relation (long-term clock decay)
 
     """
-    T0 = 13.5
+    T0 = 13.440
     #     offset = 13.9158325193 - 0.027918 - 4.608765729063114e-4 -7.463444052344004e-9
-    offset = 13.8874536353 - 4.095179312091239e-4
-    ppm_vs_T_pars = [-0.073795, 0.0015002]
-    ppm_vs_time_pars = [0.008276, 256., -220.043,
-                        3.408586903702425e-05]
+    # offset = 13.8874536353 - 4.095179312091239e-4
+    offset = 13.91877 -0.02020554 # sum the "e" parameter from long term
+    ppm_vs_T_pars = [-0.07413, 0.00158]
+    # ppm_vs_T_pars = [-0.073795, 0.0015002]
+    # ppm_vs_time_pars = [0.008276, 256., -220.043,
+    #                     3.408586903702425e-05]
+    ppm_vs_time_pars = [0.00874492067, 100.255995, -0.251789345,
+                        0.0334934847]
     if craig_fit:
         offset = 1.3847529679329989e+01
         ppm_vs_T_pars = [-7.3964896025586133e-02, 1.5055740907563737e-03]
+
 
     temp = (temperature - T0)
     ftemp = offset + ppm_vs_T_pars[0] * temp + \
@@ -1076,7 +1333,6 @@ def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
                       debug=False, craig_fit=False,
                       time_resolution=10):
-    from scipy.integrate import cumtrapz
     table_times = temptable['met']
 
     if met_start is None:
@@ -1102,10 +1358,7 @@ def temperature_delay(temptable, divisor,
 
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
 
-    # delay = cumtrapz(clock_rate_corr, times_fine, initial=0)
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
-    #     print(np.max(np.abs(delay - delay_sim)))
-    #     delay = np.cumsum(dt * clock_rate_corr)
     return interp1d(times_fine, delay_sim, fill_value='extrapolate',
                     bounds_error=False)
 
@@ -1120,7 +1373,8 @@ def temperature_correction_table(met_start, met_stop,
     import six
     if hdf_dump_file is not None and os.path.exists(hdf_dump_file):
         log.info(f"Reading cached data from file {hdf_dump_file}")
-        result_table = Table.read(hdf_dump_file)
+
+        result_table = fix_byteorder(Table.read(hdf_dump_file))
         mets = np.array(result_table['met'])
         if (met_start > mets[10] or met_stop < mets[-20]) and (
                 met_stop - met_start < 3 * 365 * 86400):
@@ -1181,22 +1435,23 @@ def temperature_correction_table(met_start, met_stop,
             log.warning(
                 f"Too few temperature points in interval "
                 f"{start} to {stop} (MET)")
-            continue
+            temp_corr = np.zeros_like(times_fine)
+        else:
+            delay_function = \
+                temperature_delay(temptable_filt, divisors[i], craig_fit=craig_fit,
+                                  time_resolution=time_resolution)
 
-        delay_function = \
-            temperature_delay(temptable_filt, divisors[i], craig_fit=craig_fit,
-                              time_resolution=time_resolution)
-
-        temp_corr = \
-            delay_function(times_fine) + last_corr - delay_function(last_time)
+            temp_corr = \
+                delay_function(times_fine) + last_corr - delay_function(last_time)
+            temp_corr[temp_corr != temp_corr] = 0
 
         new_data = Table(dict(met=times_fine,
                               temp_corr=temp_corr,
                               divisor=np.zeros_like(times_fine) + divisors[i]))
 
-        if np.any(temp_corr != temp_corr):
-            log.error("Invalid data in temperature table")
-            break
+        # if np.any(temp_corr != temp_corr):
+        #     log.error("Invalid data in temperature table")
+        #     break
 
         N = len(times_fine)
         table[firstidx:firstidx + N] = new_data
@@ -1207,8 +1462,6 @@ def temperature_correction_table(met_start, met_stop,
 
     log.info("Interpolation done.")
     table = table[:firstidx]
-
-    # data = table.to_pandas()
 
     if hdf_dump_file is not None:
         log.info(f"Saving intermediate data to {hdf_dump_file}...")
@@ -1275,6 +1528,12 @@ def main_create_clockfile(args=None):
                         help="Output file name")
     parser.add_argument("--cache", default=None,
                         help="HDF5 dump file used as cache (ext. hdf5)")
+    parser.add_argument("--shift-times", default=0, type=float,
+                        help="Shift times by this amount")
+    parser.add_argument("--save-nodetrend",
+                        help="Save un-detrended correction in separate FITS "
+                             "extension",
+                        action='store_true', default=False)
 
     args = parser.parse_args(args)
 
@@ -1283,10 +1542,14 @@ def main_create_clockfile(args=None):
                                 clock_offset_file=args.offsets,
                                 hdf_dump_file=args.cache,
                                 freqchange_file=args.frequency_changes)
-    clockcorr.write_clock_file(args.outfile)
+    clockcorr.write_clock_file(args.outfile,
+                               save_nodetrend=args.save_nodetrend,
+                               shift_times=args.shift_times)
 
+    clock_offset_table = read_clock_offset_table(args.offsets)
     plot = plot_scatter(Table.read(args.outfile, hdu="NU_FINE_CLOCK"),
-                        clockcorr.clock_offset_table)
+                        clock_offset_table,
+                        shift_times=args.shift_times)
     from bokeh.io import output_file, save, show
     outfig = args.outfile.replace(".gz", "").replace(".fits", "")
     renderer = hv.renderer('bokeh')
@@ -1308,7 +1571,7 @@ def main_update_temptable(args=None):
 
     last_measurement = None
     existing_table = None
-    if os.path.exists(args.outfile):
+    if args.outfile is not None and os.path.exists(args.outfile):
         log.info("Reading existing temperature table")
         existing_table = Table.read(args.outfile)
         last_measurement = existing_table['mjd'][-1] + 0.001 / 86400
@@ -1331,8 +1594,12 @@ def main_update_temptable(args=None):
     new_table['temperature_smooth'] = \
         savgol_filter(new_table['temperature'], window, 2)
 
-    log.info(f"Saving to {args.outfile}")
-    new_table.write(args.outfile, path="temptable", overwrite=True)
+    outfile = args.outfile
+    if args.outfile is None:
+        outfile = os.path.splitext(args.tempfile)[0] + '.hdf5'
+
+    log.info(f"Saving to {outfile}")
+    new_table.write(outfile, path="temptable", overwrite=True)
 
 
 def main_plot_diagnostics(args=None):

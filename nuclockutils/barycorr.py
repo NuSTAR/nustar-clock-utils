@@ -1,9 +1,18 @@
-from astropy.table import Table
+import os
 import numpy as np
+from astropy.table import Table
 from scipy.interpolate import interp1d
-from .utils import filter_with_region
 from astropy import log
-from .utils import NUSTAR_MJDREF
+import pint.models
+import pint.toa as toa
+from pint.models import StandardTimingModel
+from pint.observatory.nustar_obs import NuSTARObs
+from astropy.io import fits
+from astropy.time import Time
+from astropy.coordinates import Angle
+import nuclockutils
+from .utils import filter_with_region, high_precision_keyword_read
+from .nustarclock import interpolate_clock_function
 
 
 class OrbitalFunctions():
@@ -17,7 +26,7 @@ def get_orbital_functions(orbfile):
     from astropy.time import Time
     import astropy.units as u
     orbtable = Table.read(orbfile)
-    mjdref = orbtable.meta['MJDREFF'] + orbtable.meta['MJDREFI']
+    mjdref = high_precision_keyword_read(orbtable.meta, 'MJDREF')
 
     times = Time(np.array(orbtable['TIME'] / 86400 + mjdref), format='mjd')
     if 'GEODETIC' in orbtable.colnames:
@@ -51,158 +60,120 @@ def get_orbital_functions(orbfile):
     return orbfunc
 
 
-def load_event_and_GTI_TOAs(eventname,
-                            timesys=None, timeref=None):
-    '''
-    Read photon event times out of a FITS file as PINT TOA objects.
+def get_dummy_parfile_for_position(orbfile):
 
-    Correctly handles raw event files, or ones processed with axBary to have
-    barycentered  TOAs. Different conditions may apply to different missions.
+    # Construct model by hand
+    with fits.open(orbfile, memmap=True) as hdul:
+        label = '_NOM'
+        if 'RA_OBJ' in hdul[1].header:
+            label = '_OBJ'
+        ra = hdul[1].header[f'RA{label}']
+        dec = hdul[1].header[f'DEC{label}']
 
-    Parameters
-    ----------
-    eventname : str
-        File name of the FITS event list
-    timesys : str, default None
-        Force this time system
-    timeref : str, default None
-        Forse this time reference
+    modelin = StandardTimingModel
+    # Should check if 12:13:14.2 syntax is used and support that as well!
+    modelin.RAJ.quantity = Angle(ra, unit="deg")
+    modelin.DECJ.quantity = Angle(dec, unit="deg")
+    modelin.DM.quantity = 0
+    return modelin
 
-    Returns
-    -------
-    toalist : list of TOA objects
-    '''
-    # Load photon times from event file
-    from pint.event_toas import check_timeref, check_timesys, _get_timesys, \
-        _get_timeref, _default_obs_and_scale, read_fits_event_mjds_tuples
-    from astropy.io import fits
-    from pint import toa
-    hdulist = fits.open(eventname)
 
-    if timesys is None:
-        timesys = _get_timesys(hdulist[1])
-    if timeref is None:
-        timeref = _get_timeref(hdulist[1])
-    check_timesys(timesys)
-    check_timeref(timeref)
+def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
+    no = NuSTARObs(name="NuSTAR", FPorbname=orbfile, tt2tdb_mode="pint")
+    with fits.open(orbfile) as hdul:
+        mjdref = high_precision_keyword_read(hdul[1].header, 'MJDREF')
 
-    obs, scale = _default_obs_and_scale("nustar", timesys, timeref)
+    mjds = np.arange(no.X.x[1], no.X.x[-2], dt / 86400)
+    mets = (mjds - mjdref) * 86400
 
-    # Read time column from FITS file
-    mjds = hdulist['EVENTS'].data["TIME"] / 86400 + NUSTAR_MJDREF
-    gmjds0 = hdulist['GTI'].data["START"] / 86400 + NUSTAR_MJDREF
-    gmjds1 = hdulist['GTI'].data["STOP"] / 86400 + NUSTAR_MJDREF
-
-    hdulist.close()
-
+    obs, scale = 'nustar', "tt"
     toalist = [None] * len(mjds)
+
     for i in range(len(mjds)):
+        # Create TOA list
         toalist[i] = toa.TOA(mjds[i], obs=obs, scale=scale)
-    gtoalist0 = [None] * len(gmjds0)
-    for i in range(len(gmjds0)):
-        gtoalist0[i] = toa.TOA(gmjds0[i], obs=obs, scale=scale)
-    gtoalist1 = [None] * len(gmjds1)
-    for i in range(len(gmjds1)):
-        gtoalist1[i] = toa.TOA(gmjds1[i], obs=obs, scale=scale)
 
-    return toalist, gtoalist0, gtoalist1
-
-
-def barycorr(evfile, orbfile, parfile, outfile=None,
-             overwrite=False):
-    from astropy.io import fits
-    from pint.observatory.nustar_obs import NuSTARObs
-
-    from pint.models import get_model, StandardTimingModel
-    from pint.toa import get_TOAs_list
-    from shutil import copyfile
-    from .utils import splitext_improved, NUSTAR_MJDREF, sec_to_mjd
-    from astropy.time import Time
-    from astropy.coordinates import Angle
-    import os
-    import warnings
-
-    warnings.warn("At the moment, TSTART, TSTOP etc. might be affected "
-                  "by leap seconds")
-    if outfile is None:
-        ext = splitext_improved(evfile)[1]
-        outfile = evfile.replace(ext, '_bary' + ext)
-
-    if os.path.exists(outfile) and not overwrite:
-        raise RuntimeError('Output file exists')
-
-    NuSTARObs(name='NuSTAR',FPorbname=orbfile, tt2tdb_mode='pint')
-    tl, startl, stopl = load_event_and_GTI_TOAs(evfile, timeref='LOCAL')
-
-    # Read in model
-    if parfile is not None:
-        log.info(f"Reading source position from {parfile}")
-        modelin = get_model(parfile)
+    if parfile is not None and os.path.exists(parfile):
+        modelin = pint.models.get_model(parfile)
     else:
-        log.warning("No parfile specified. Using information in FITS file")
-        # Construct model by hand
-        with fits.open(evfile, memmap=True) as hdul:
-            ra = hdul['EVENTS'].header['RA_OBJ']
-            dec = hdul['EVENTS'].header['DEC_OBJ']
-        modelin = StandardTimingModel
-        # Should check if 12:13:14.2 syntax is used and support that as well!
-        modelin.RAJ.quantity = Angle(ra, unit="deg")
-        modelin.DECJ.quantity = Angle(dec, unit="deg")
-        modelin.DM.quantity = 0
+        modelin = get_dummy_parfile_for_position(orbfile)
 
-    ts = get_TOAs_list(tl, include_bipm=False,
-        include_gps=False, planets=False, tdb_method='default',
-                       ephem='DE421')
-    starts = get_TOAs_list(startl, include_bipm=False,
-        include_gps=False, planets=False, tdb_method='default',
-                       ephem='DE421')
-    stops = get_TOAs_list(stopl, include_bipm=False,
-        include_gps=False, planets=False, tdb_method='default',
-                       ephem='DE421')
-    ts.filename = orbfile
-    mjds = modelin.get_barycentric_toas(ts)
-    startmjds = modelin.get_barycentric_toas(starts)
-    stopmjds = modelin.get_barycentric_toas(stops)
+    ts = toa.get_TOAs_list(
+        toalist,
+        ephem=ephem,
+        include_bipm=False,
+        include_gps=False,
+        planets=False,
+        tdb_method='default',
+    )
+    bats = modelin.get_barycentric_toas(ts)
+    return interp1d(mets, (bats.value - mjds) * 86400,
+        assume_sorted=True, bounds_error=False, fill_value='extrapolate')
 
-    log.info(f"Creating output file {outfile}")
-    copyfile(evfile, outfile)
 
-    with fits.open(outfile, memmap=True) as hdul:
-        mets = (mjds.value - NUSTAR_MJDREF) * 86400
-        gtistarts = (startmjds.value - NUSTAR_MJDREF) * 86400
-        gtistops = (stopmjds.value - NUSTAR_MJDREF) * 86400
+def correct_times(times, bary_fun, clock_fun=None):
+    if clock_fun is not None:
+        times += clock_fun(times)
+    times += bary_fun(times)
 
-        uncorr_mets = hdul[1].data['TIME']
-        start_corr = mets[0] - uncorr_mets[0]
-        stop_corr = mets[-1] - uncorr_mets[-1]
+    return times
 
-        start = hdul[1].header['TSTART'] + start_corr
-        start = Time(sec_to_mjd(start), format='mjd')
 
-        stop = hdul[1].header['TSTOP'] + stop_corr
-        stop = Time(sec_to_mjd(stop), format='mjd')
+def apply_clock_correction(
+    fname, orbfile, outfile='bary.evt', clockfile=None,
+    parfile=None, ephem='DE421', radecsys='ICRS', overwrite=False,
+    nodetrend=False, shift_times=0):
+    version = nuclockutils.__version__
 
-        hdul["EVENTS"].data['TIME'] = mets
-        hdul['GTI'].data['START'] = gtistarts
-        hdul['GTI'].data['STOP'] = gtistops
+    bary_fun = get_barycentric_correction(orbfile, parfile, ephem=ephem)
+    with fits.open(fname, memmap=True) as hdul:
+        times = hdul[1].data['TIME']
+        clock_fun = None
+        if clockfile is not None and os.path.exists(clockfile):
+            hduname = 'NU_FINE_CLOCK'
+            if nodetrend:
+                hduname = 'NU_FINE_CLOCK_NODETREND'
+            log.info(f"Read extension {hduname}")
+            clocktable = Table.read(clockfile, hdu=hduname)
+            clock_corr, _ = interpolate_clock_function(clocktable, times)
+            clock_fun = interp1d(times, clock_corr,
+                assume_sorted=True, bounds_error=False, fill_value='extrapolate')
+        elif clockfile is not None and not os.path.exists(clockfile):
+            raise FileNotFoundError(f"Clock file {clockfile} not found")
 
-        version = '0.0dev'
         for hdu in hdul:
+            log.info(f"Updating HDU {hdu.name}")
+            for keyname in ['TIME', 'START', 'STOP', 'TSTART', 'TSTOP']:
+                if hdu.data is not None and keyname in hdu.data.names:
+                    log.info(f"Updating column {keyname}")
+                    hdu.data[keyname] = \
+                        correct_times(hdu.data[keyname] + shift_times, bary_fun, clock_fun)
+                if keyname in hdu.header:
+                    log.info(f"Updating header keyword {keyname}")
+                    hdu.header[keyname] = \
+                        correct_times(hdu.header[keyname] + shift_times, bary_fun, clock_fun)
+
             hdu.header['CREATOR'] = f'NuSTAR Clock Utils - v. {version}'
             hdu.header['DATE'] = Time.now().fits
-            hdu.header['DATE-END'] = stop.fits
-            hdu.header['DATE-OBS'] = start.fits
-            hdu.header['PLEPHEM'] = 'JPL-DE421'
-            hdu.header['RADECSYS'] = 'FK5'
+            hdu.header['PLEPHEM'] = f'JPL-{ephem}'
+            hdu.header['RADECSYS'] = radecsys
             hdu.header['TIMEREF'] = 'SOLARSYSTEM'
             hdu.header['TIMESYS'] = 'TDB'
             hdu.header['TIMEZERO'] = 0.0
-            hdu.header['TSTART'] = (start.mjd - NUSTAR_MJDREF) * 86400
-            hdu.header['TSTOP'] = (stop.mjd - NUSTAR_MJDREF) * 86400
             hdu.header['TREFDIR'] = 'RA_OBJ,DEC_OBJ'
             hdu.header['TREFPOS'] = 'BARYCENTER'
-
         hdul.writeto(outfile, overwrite=True)
+
+
+def _default_out_file(args):
+    outfile = 'bary'
+    if not os.path.exists(args.clockfile):
+        outfile += '_noclock'
+    if not os.path.exists(args.parfile):
+        outfile += '_nopar'
+    if args.use_nodetrend:
+        outfile += '_nodetrend'
+    outfile += '.evt'
 
     return outfile
 
@@ -215,26 +186,44 @@ def main_barycorr(args=None):
 
     parser.add_argument("file", help="Uncorrected event file")
     parser.add_argument("orbitfile", help="Orbit file")
-    parser.add_argument("parfile", help="Parameter file in TEMPO/TEMPO2 "
-                                        "format (for precise coordinates)",
-                        nargs="?", default=None)
+    parser.add_argument("-p", "--parfile",
+                        help="Parameter file in TEMPO/TEMPO2 "
+                             "format (for precise coordinates)",
+                        default=None, type=str)
     parser.add_argument("-o", "--outfile", default=None,
-                        help="Output file name (default <inputfname>_tc.evt)")
+                        help="Output file name (default bary_<opts>.evt)")
+    parser.add_argument("--shift-times", default=0, type=float,
+                        help="Shift times by this amount")
+    parser.add_argument("-c", "--clockfile", default=None,
+                        help="Clock correction file")
     parser.add_argument("--overwrite",
                         help="Overwrite existing data",
                         action='store_true', default=False)
-
     parser.add_argument("-r", "--region", default=None, type=str,
                         help="Filter with ds9-compatible region file. MUST be"
                              " a circular region in the FK5 frame")
+    parser.add_argument("--use-nodetrend",
+                        help="Use un-detrended correction in separate FITS "
+                             "extension",
+                        action='store_true', default=False)
 
     args = parser.parse_args(args)
+
+    outfile = args.outfile
+    if outfile is None:
+        outfile = _default_out_file(args)
 
     if args.region is not None:
         args.file = filter_with_region(args.file)
 
-    outfile = \
-        barycorr(args.file, args.orbitfile, args.parfile, outfile=args.outfile,
-                 overwrite=args.overwrite)
+    apply_clock_correction(
+        args.file, args.orbitfile, parfile=args.parfile, outfile=outfile,
+        overwrite=args.overwrite, nodetrend=args.use_nodetrend,
+        clockfile=args.clockfile,
+        shift_times=args.shift_times)
 
     return outfile
+
+
+if __name__ == '__main__':
+    main_barycorr()
