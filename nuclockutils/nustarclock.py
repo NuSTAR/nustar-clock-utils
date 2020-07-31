@@ -1185,6 +1185,13 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0):
         The black lines indicate the local scatter, calculated over a time 
         span of approximately 5 days. The largest spikes indicate pathological
         intervals.</p>
+        <p>
+        For periods when there are no temperature measurements the code interpoaltes
+        linearly between the raw clock offsets. We arbitrarily assign a 1-ms error to
+        these periods, which should account for the typical deviation fo the real clock
+        delay with respect to the linear interpolation. This results in 1-ms "spikes" in
+        the residuals and the rolling averages.
+        </p>        
         <p>Use the tools on the top right to zoom in the plot.</p>
         """)
 
