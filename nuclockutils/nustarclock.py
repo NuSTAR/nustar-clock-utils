@@ -1186,9 +1186,9 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0):
         span of approximately 5 days. The largest spikes indicate pathological
         intervals.</p>
         <p>
-        For periods when there are no temperature measurements the code interpoaltes
+        For periods when there are no temperature measurements the code interpolates
         linearly between the raw clock offsets. We arbitrarily assign a 1-ms error to
-        these periods, which should account for the typical deviation fo the real clock
+        these periods, which should account for the typical deviation of the real clock
         delay with respect to the linear interpolation. This results in 1-ms "spikes" in
         the residuals and the rolling averages.
         </p>        
