@@ -1535,7 +1535,7 @@ def main_create_clockfile(args=None):
                         help="Output file name")
     parser.add_argument("--cache", default=None,
                         help="HDF5 dump file used as cache (ext. hdf5)")
-    parser.add_argument("--shift-times", default=0, type=float,
+    parser.add_argument("--shift-times", default=4.9e-3, type=float,
                         help="Shift times by this amount")
     parser.add_argument("--save-nodetrend",
                         help="Save un-detrended correction in separate FITS "
