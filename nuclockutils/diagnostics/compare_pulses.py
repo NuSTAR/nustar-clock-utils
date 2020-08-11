@@ -1,9 +1,11 @@
 import sys
+import os
+import numpy as np
 from astropy.time import Time
 from astropy.table import Table
 import matplotlib.pyplot as plt
 from uncertainties import ufloat
-import numpy as np
+from astropy import log
 from statsmodels.robust import mad
 
 from .fftfit import fftfit
@@ -28,7 +30,9 @@ def format_profile_and_get_phase(file, template=None):
 
     freq = table.meta['F0']
     fdot = table.meta['F1']
-    fddot = table.meta['F2']
+    fddot = 0
+    if 'F2' in table.meta:
+        fddot = table.meta['F2']
     delta_t = (mjd - pepoch) * 86400
     f0 = freq + fdot * delta_t + 0.5 * fddot * delta_t ** 2
 
@@ -74,7 +78,7 @@ def main(args=None):
     mjds = []
     plt.figure(figsize=(6, 9))
     ref_profile = None
-    if args.template is not None:
+    if args.template is not None and os.path.exists(args.template):
         mjd, phase, prof, _, _, period_ms = \
             format_profile_and_get_phase(args.template, template=None)
         phase_time_plot, prof_plot = format_for_plotting(phase, prof, period_ms)
@@ -87,6 +91,7 @@ def main(args=None):
 
     if ref_profile is None:
         log.warning("No template provided; using maxima for phase calculation")
+
     for i, f in enumerate(files):
         mjd, phase, prof, phase_res, phase_res_err, period_ms = \
             format_profile_and_get_phase(f, template=ref_profile)
@@ -100,9 +105,13 @@ def main(args=None):
         mjds.append(mjd)
         maxs.append(local_max)
 
-        plt.plot(phase_time_plot, (i + 1) * 0.2 + prof_plot, drawstyle='steps-mid', label=f, alpha=0.5, color='grey')
+        plt.plot(phase_time_plot, (i + 1) * 0.2 + prof_plot,
+                 drawstyle='steps-mid', label=f, alpha=0.5, color='grey')
+        if len(files) < 2:
+            continue
         for plot_shift in [0, period_ms, 2 * period_ms]:
-            plt.scatter(plot_shift + phase_res * period_ms, (i + 1) * 0.2, s=10, color='b')
+            plt.scatter(plot_shift + phase_res * period_ms, (i + 1) * 0.2,
+                        s=10, color='b')
 
     mjds = np.array(mjds)
     maxs = np.array(maxs) - ref_max
@@ -125,12 +134,18 @@ def main(args=None):
     fit_shift = ufloat(fit_max, tot_err)
     # print(f"Fitted Mean shift = {fit_shift}" + " ms")
     # print(f"Mean shift = {shift}" + " ms")
-    plt.title(f"Mean shift = {fit_shift}" + " ms")
+    if len(files) >= 2:
+        plt.title(f"Mean shift = {fit_shift}" + " ms")
+    else:
+        plt.title(files[0])
+
     plt.xlim([0, period_ms * 2])
     plt.ylim([-0.1, None])
     plt.axvline(ref_max, alpha=0.5, color='b')
-    for t0 in [0, period_ms, 2 * period_ms]:
-        plt.axvspan(t0 + fit_max - tot_err, t0 + fit_max + tot_err, alpha=0.5, color='red')
+    if len(files) >= 2:
+        for t0 in [0, period_ms, 2 * period_ms]:
+            plt.axvspan(t0 + fit_max - tot_err, t0 + fit_max + tot_err,
+                        alpha=0.5, color='red')
 
     if len(maxs) <= 5:
         plt.legend()
