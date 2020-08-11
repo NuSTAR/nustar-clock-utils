@@ -2,6 +2,7 @@ import os
 import glob
 import re
 import traceback
+import subprocess as sp
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -41,12 +42,14 @@ def get_observing_mjd(fname):
     return np.array([tstart, tstop]) / 86400 + mjdref
 
 
-def fold_file_to_ephemeris(fname, parfile, emin=None, emax=None, nbin=128, outroot="out"):
+def fold_file_to_ephemeris(fname, parfile, emin=None, emax=None,
+                           nbin=128, outroot="out"):
     mjdstart, mjdstop = get_observing_mjd(fname)
     mjdmean = (mjdstart + mjdstop) / 2
     ephem = get_ephemeris_from_parfile(parfile)
 
-    log.info(f"Calculating correction function between {mjdstart} and {mjdstop}...")
+    log.info(f"Calculating correction function between "
+             f"{mjdstart} and {mjdstop}...")
     correction_fun = get_phase_from_ephemeris_file(mjdstart, mjdstop, parfile)
 
     events = get_events_from_fits(fname)
@@ -90,6 +93,9 @@ def main(args=None):
     parser.add_argument('-c', '--clockfile', required=True, type=str,
                         help="Clock correction file")
     parser.add_argument('--bary-suffix', default='_bary')
+    parser.add_argument('--plot-phaseogram', default=False,
+                        action='store_true',
+                        help='Plot the phaseogram (requires PINT)')
 
     args = parser.parse_args(args)
 
@@ -99,7 +105,9 @@ def main(args=None):
     emax = args.emax
     nbin = args.nbin
 
-    outdir = os.path.basename(args.clockfile).replace('.gz', '').replace('.fits', '')
+    outdir = \
+        os.path.basename(args.clockfile
+                         ).replace('.gz', '').replace('.fits', '')
     for fname in args.fnames:
         basename = os.path.basename(fname)
         try:
@@ -125,16 +133,25 @@ def main(args=None):
 
             bary_file = outroot + args.bary_suffix + '.evt.gz'
             mkdir(outdir)
+
             if not os.path.exists(bary_file):
-                cmd = f'{fname} {attorb_file} -p {parfile} -c {args.clockfile} -o {bary_file}'
+                cmd = f'{fname} {attorb_file} -p {parfile} ' \
+                      f'-c {args.clockfile} -o {bary_file}'
 
                 nubarycorr(cmd.split())
+
+            if args.plot_phaseogram:
+                cmd = f'photonphase {bary_file} {parfile} ' \
+                      f'--plotfile {outroot}_phaseogram.jpg'
+                sp.check_call(cmd.split())
+
             if emin is not None or emax is not None:
                 outroot += f'_{emin}-{emax}keV'
 
             fold_file_to_ephemeris(
                 bary_file, parfile, emin=emin, emax=emax, nbin=nbin,
                 outroot=outroot)
+
         except Exception as e:
             log.error(f"Error processing {fname}")
             tb = traceback.format_exc()
