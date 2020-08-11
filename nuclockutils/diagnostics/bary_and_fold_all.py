@@ -144,7 +144,8 @@ def main(args=None):
 
     cmd = glob.glob(os.path.join(outdir, '*.ecsv'))
     if len(cmd) > 0:
-        cmd += ['--outfile', outdir + '.jpg', '--template', 'dead_time_crab_template.ecsv']
+        cmd += ['--outfile', outdir + '.jpg',
+                '--template', 'profile_template.ecsv']
         main_compare_pulses(cmd)
 
 
