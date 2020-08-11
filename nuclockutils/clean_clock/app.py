@@ -153,7 +153,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
         else:
             all_nustar_obs[col][-1] *= 0
 
-    idx = np.searchsorted(all_nustar_obs['MET'][:-1], table_new['met'])
+    idx = np.searchsorted(all_nustar_obs['MET'][1:], table_new['met'])
 
     all_nustar_obs_reindex = all_nustar_obs[idx]
 
