@@ -242,8 +242,8 @@ def rolling_std(a, window, pad='center'):
     return rolling_stat(np.std, a, window, pad, axis=-1)
 
 
-def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.0001,
-                        downsample=5):
+def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
+                        downsample=10):
     """Pass a spline through the data
 
     Examples
