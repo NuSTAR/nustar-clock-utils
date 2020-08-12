@@ -108,7 +108,8 @@ def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
     )
     bats = modelin.get_barycentric_toas(ts)
     return interp1d(mets, (bats.value - mjds) * 86400,
-        assume_sorted=True, bounds_error=False, fill_value='extrapolate')
+        assume_sorted=True, bounds_error=False, fill_value='extrapolate',
+                    kind='quadratic')
 
 
 def correct_times(times, bary_fun, clock_fun=None):
@@ -128,6 +129,7 @@ def apply_clock_correction(
     bary_fun = get_barycentric_correction(orbfile, parfile, ephem=ephem)
     with fits.open(fname, memmap=True) as hdul:
         times = hdul[1].data['TIME']
+        unique_times = np.unique(times)
         clock_fun = None
         if clockfile is not None and os.path.exists(clockfile):
             hduname = 'NU_FINE_CLOCK'
@@ -135,8 +137,9 @@ def apply_clock_correction(
                 hduname = 'NU_FINE_CLOCK_NODETREND'
             log.info(f"Read extension {hduname}")
             clocktable = Table.read(clockfile, hdu=hduname)
-            clock_corr, _ = interpolate_clock_function(clocktable, times)
-            clock_fun = interp1d(times, clock_corr,
+            clock_corr, _ = \
+                interpolate_clock_function(clocktable, unique_times)
+            clock_fun = interp1d(unique_times, clock_corr,
                 assume_sorted=True, bounds_error=False, fill_value='extrapolate')
         elif clockfile is not None and not os.path.exists(clockfile):
             raise FileNotFoundError(f"Clock file {clockfile} not found")
@@ -147,11 +150,20 @@ def apply_clock_correction(
                 if hdu.data is not None and keyname in hdu.data.names:
                     log.info(f"Updating column {keyname}")
                     hdu.data[keyname] = \
-                        correct_times(hdu.data[keyname] + shift_times, bary_fun, clock_fun)
+                        correct_times(hdu.data[keyname] + shift_times,
+                                      bary_fun, clock_fun)
                 if keyname in hdu.header:
                     log.info(f"Updating header keyword {keyname}")
-                    hdu.header[keyname] = \
-                        correct_times(hdu.header[keyname] + shift_times, bary_fun, clock_fun)
+                    corrected_time = \
+                        correct_times(hdu.header[keyname] + shift_times,
+                                      bary_fun, clock_fun)
+                    if not np.isfinite(corrected_time):
+                        log.error(
+                            f"Bad value when updating header keyword {keyname}: "
+                            f"{hdu.header[keyname]}->{corrected_time}")
+                    else:
+                        hdu.header[keyname] = corrected_time
+
 
             hdu.header['CREATOR'] = f'NuSTAR Clock Utils - v. {version}'
             hdu.header['DATE'] = Time.now().fits

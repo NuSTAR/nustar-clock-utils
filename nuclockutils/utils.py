@@ -142,7 +142,7 @@ def get_obsid_list_from_heasarc(cache_file='heasarc.hdf5'):
     try:
         heasarc = Heasarc()
         all_nustar_obs = heasarc.query_object(
-            '*', 'numaster', resultmax=10000,
+            '*', 'numaster', resultmax=100000,
             fields='OBSID,TIME,END_TIME,NAME,OBSERVATION_MODE,OBS_TYPE')
     except Exception:
         return Table({
@@ -242,8 +242,8 @@ def rolling_std(a, window, pad='center'):
     return rolling_stat(np.std, a, window, pad, axis=-1)
 
 
-def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.0001,
-                        downsample=5):
+def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
+                        downsample=10):
     """Pass a spline through the data
 
     Examples

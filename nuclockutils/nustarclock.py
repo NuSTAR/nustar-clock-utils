@@ -138,7 +138,7 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
         clock_residuals = clock_residuals[better_points]
 
     detrend_fun = spline_through_data(clock_offset_table['met'],
-                                      clock_residuals, downsample=4)
+                                      clock_residuals, downsample=20)
 
     r_std = residual_roll_std(
         clock_residuals - detrend_fun(clock_offset_table['met']))
@@ -202,7 +202,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         #
         # if p_new is not None:
         #     p = p_new
-        poly_order = min(met.size // 300 + 1, 10)
+        poly_order = min(met.size // 300 + 1, 2)
         p0 = np.zeros(poly_order + 1)
         p0[0] = q
         if p0.size > 1:
@@ -1317,15 +1317,12 @@ def clock_ppm_model(nustar_met, temperature, craig_fit=False):
     # offset = 13.8874536353 - 4.095179312091239e-4
     offset = 13.91877 -0.02020554 # sum the "e" parameter from long term
     ppm_vs_T_pars = [-0.07413, 0.00158]
-    # ppm_vs_T_pars = [-0.073795, 0.0015002]
-    # ppm_vs_time_pars = [0.008276, 256., -220.043,
-    #                     3.408586903702425e-05]
+
     ppm_vs_time_pars = [0.00874492067, 100.255995, -0.251789345,
                         0.0334934847]
     if craig_fit:
         offset = 1.3847529679329989e+01
         ppm_vs_T_pars = [-7.3964896025586133e-02, 1.5055740907563737e-03]
-
 
     temp = (temperature - T0)
     ftemp = offset + ppm_vs_T_pars[0] * temp + \
