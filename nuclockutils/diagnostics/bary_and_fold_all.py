@@ -142,7 +142,8 @@ def main(args=None):
 
             if args.plot_phaseogram:
                 cmd = f'photonphase {bary_file} {parfile} ' \
-                      f'--plotfile {outroot}_phaseogram.jpg'
+                      f'--plotfile {outroot}_phaseogram.jpg ' \
+                      f'--addphase --absphase'
                 sp.check_call(cmd.split())
 
             if emin is not None or emax is not None:
