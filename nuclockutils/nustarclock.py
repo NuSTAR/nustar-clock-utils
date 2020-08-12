@@ -202,7 +202,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         #
         # if p_new is not None:
         #     p = p_new
-        poly_order = min(met.size // 300 + 1, 10)
+        poly_order = min(met.size // 300 + 1, 2)
         p0 = np.zeros(poly_order + 1)
         p0[0] = q
         if p0.size > 1:

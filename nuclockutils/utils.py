@@ -142,7 +142,7 @@ def get_obsid_list_from_heasarc(cache_file='heasarc.hdf5'):
     try:
         heasarc = Heasarc()
         all_nustar_obs = heasarc.query_object(
-            '*', 'numaster', resultmax=10000,
+            '*', 'numaster', resultmax=100000,
             fields='OBSID,TIME,END_TIME,NAME,OBSERVATION_MODE,OBS_TYPE')
     except Exception:
         return Table({
