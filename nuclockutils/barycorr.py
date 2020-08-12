@@ -113,11 +113,12 @@ def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
 
 
 def correct_times(times, bary_fun, clock_fun=None):
+    cl_corr = 0
     if clock_fun is not None:
-        times += clock_fun(times)
-    times += bary_fun(times)
+        cl_corr = clock_fun(times)
+    bary_corr = bary_fun(times)
 
-    return times
+    return times + cl_corr + bary_corr
 
 
 def apply_clock_correction(
