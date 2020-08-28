@@ -863,7 +863,7 @@ class ClockCorrection():
         self.temperature_correction_data = table_new
 
     def write_clock_file(self, filename=None, save_nodetrend=False,
-                         shift_times=0.):
+                         shift_times=0., highres=False):
         from astropy.io.fits import Header, HDUList, BinTableHDU, PrimaryHDU
         from astropy.time import Time
 
@@ -911,7 +911,10 @@ class ClockCorrection():
                  table_new['met'], edge_order=2),
              'CLOCK_ERR_CORR': clockerr})
 
-        new_clock_table_subsample = new_clock_table[::100]
+        if not highres:
+            new_clock_table_subsample = new_clock_table[::100]
+        else:
+            new_clock_table_subsample = new_clock_table
         del new_clock_table
         if save_nodetrend:
             new_clock_table_nodetrend = Table(
@@ -922,8 +925,13 @@ class ClockCorrection():
                      table_new['met'], edge_order=2),
                  'CLOCK_ERR_CORR': clock_err_fun(
                      table_new['met'])})
-            new_clock_table_subsample_nodetrend = \
-                new_clock_table_nodetrend[::100]
+            if not highres:
+                new_clock_table_subsample_nodetrend = \
+                    new_clock_table_nodetrend[::100]
+            else:
+                new_clock_table_subsample_nodetrend = \
+                    new_clock_table_nodetrend
+
             del new_clock_table_nodetrend
 
         t = Time.now()
@@ -1538,6 +1546,10 @@ def main_create_clockfile(args=None):
                         help="Save un-detrended correction in separate FITS "
                              "extension",
                         action='store_true', default=False)
+    parser.add_argument("--high-resolution",
+                        help="Create a high-resolution file "
+                             "(100 times larger)",
+                        action='store_true', default=False)
 
     args = parser.parse_args(args)
 
@@ -1548,7 +1560,8 @@ def main_create_clockfile(args=None):
                                 freqchange_file=args.frequency_changes)
     clockcorr.write_clock_file(args.outfile,
                                save_nodetrend=args.save_nodetrend,
-                               shift_times=args.shift_times)
+                               shift_times=args.shift_times,
+                               highres=args.high_resolution)
 
     clock_offset_table = read_clock_offset_table(args.offsets)
     plot = plot_scatter(Table.read(args.outfile, hdu="NU_FINE_CLOCK"),
