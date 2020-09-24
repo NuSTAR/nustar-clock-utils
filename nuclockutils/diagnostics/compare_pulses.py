@@ -78,13 +78,14 @@ def main(args=None):
     mjds = []
     plt.figure(figsize=(6, 9))
     ref_profile = None
+    phase_time_plot_template, prof_plot_template = None, None
     if args.template is not None and os.path.exists(args.template):
         mjd, phase, prof, _, _, period_ms = \
             format_profile_and_get_phase(args.template, template=None)
-        phase_time_plot, prof_plot = format_for_plotting(phase, prof, period_ms)
+        phase_time_plot_template, prof_plot_template = format_for_plotting(phase, prof, period_ms)
         local_max = phase[np.argmax(prof)] * period_ms
 
-        plt.plot(phase_time_plot, prof_plot,
+        plt.plot(phase_time_plot_template, prof_plot_template,
             drawstyle='steps-mid', label=args.template, color='k')
         ref_profile = prof
         ref_max = local_max
@@ -100,13 +101,18 @@ def main(args=None):
 
         local_max = phase[np.argmax(prof)] * period_ms
 
-        phases.append(phase_res * period_ms)
+        local_phase_time = phase_res * period_ms
+        phases.append(local_phase_time)
         phase_errs.append(phase_res_err * period_ms)
         mjds.append(mjd)
         maxs.append(local_max)
 
         plt.plot(phase_time_plot, (i + 1) * 0.2 + prof_plot,
                  drawstyle='steps-mid', label=f, alpha=0.5, color='grey')
+        if phase_time_plot_template is not None:
+            plt.plot(phase_time_plot_template + local_phase_time,
+                     (i + 1) * 0.2 + prof_plot_template,
+                     drawstyle='steps-mid', label=f, alpha=0.5, color='grey')
         if len(files) < 2:
             continue
         for plot_shift in [0, period_ms, 2 * period_ms]:

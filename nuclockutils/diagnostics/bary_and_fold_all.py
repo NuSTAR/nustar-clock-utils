@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import astropy
 from astropy import log
 from astropy.io import fits
+import pint
 
 from .get_crab_ephemeris import get_crab_ephemeris
 from .fold_to_ephemeris import get_events_from_fits, \
@@ -96,6 +97,13 @@ def main(args=None):
     parser.add_argument('--plot-phaseogram', default=False,
                         action='store_true',
                         help='Plot the phaseogram (requires PINT)')
+    parser.add_argument("--expocorr", default=False,
+                        action='store_true',
+                        help="Calculate the exposure from (NuSTAR only, the"
+                             "event file must be unfiltered)")
+    parser.add_argument("--use-standard-barycorr", default=False,
+                        action='store_true',
+                        help="Use standard barycorr instead of nuclockutils")
 
     args = parser.parse_args(args)
 
@@ -135,10 +143,20 @@ def main(args=None):
             mkdir(outdir)
 
             if not os.path.exists(bary_file):
-                cmd = f'{fname} {attorb_file} -p {parfile} ' \
-                      f'-c {args.clockfile} -o {bary_file}'
+                if args.use_standard_barycorr:
+                    model = pint.models.get_model(parfile)
+                    ra = model.RAJ.to("degree").value
+                    dec = model.DECJ.to("degree").value
+                    cmd = f'barycorr {fname} {bary_file} ' \
+                          f'orbitfiles={attorb_file} ' \
+                          f'clockfile={args.clockfile} ' \
+                          f'refframe=ICRS ra={ra} dec={dec}'
+                    sp.check_call(cmd.split())
+                else:
+                    cmd = f'{fname} {attorb_file} -p {parfile} ' \
+                          f'-c {args.clockfile} -o {bary_file}'
 
-                nubarycorr(cmd.split())
+                    nubarycorr(cmd.split())
 
             if args.plot_phaseogram:
                 cmd = f'photonphase {bary_file} {parfile} ' \
