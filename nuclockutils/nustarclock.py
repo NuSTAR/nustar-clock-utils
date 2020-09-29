@@ -1392,14 +1392,38 @@ def clock_ppm_model(nustar_met, temperature, craig_fit=False):
         parameters of the ppm-time relation (long-term clock decay)
 
     """
+
+    # Parameters([('b0',
+    #              <Parameter 'b0', value=0.00881627228 (fixed), bounds=[0:inf]>),
+    #             ('b1', <Parameter 'b1', value=95.9392102 (fixed), bounds=[0:inf]>),
+    #             ('b2',
+    #              <Parameter 'b2', value=-0.224413446 (fixed), bounds=[-inf:0]>),
+    #             ('b3',
+    #              <Parameter 'b3', value=0.0382542123 (fixed), bounds=[0:inf]>),
+    #             ('e',
+    #              <Parameter 'e', value=-0.01877278059005673 +/- 5.17e-05, bounds=[-inf:inf]>),
+    #             ('__lnsigma',
+    #              <Parameter '__lnsigma', value=-5.4061409197641535 +/- 0.0081, bounds=[-9.210340371976182:-4.605170185988
+
+    # a0 	-0.07408473 	4.8844e-05 	(0.07%) 	-0.07395161774247343 	-0.08000000 	-0.06000000 	True
+    # a1 	0.00157866 	2.6408e-05 	(1.67%) 	0.001701982761160454 	-inf 	inf 	True
+    # c 	0.00108028 	5.9741e-05 	(5.53%) 	0.0009251728994994087 	-inf 	inf 	True
+    # __lnsigma
     T0 = 13.440
-    #     offset = 13.9158325193 - 0.027918 - 4.608765729063114e-4 -7.463444052344004e-9
-    # offset = 13.8874536353 - 4.095179312091239e-4
-    offset = 13.91877 -0.02020554 # sum the "e" parameter from long term
+    # #     offset = 13.9158325193 - 0.027918 - 4.608765729063114e-4 -7.463444052344004e-9
+    # # offset = 13.8874536353 - 4.095179312091239e-4
+    # offset = 13.91877 -0.02020554 # sum the "e" parameter from long term
+    # ppm_vs_T_pars = [-0.07408473, 0.00157866]
+    #
+    # ppm_vs_time_pars = [0.00874492067, 100.255995, -0.251789345,
+    #                     0.0334934847]
+    offset = 0.00108028 -0.01877278059005673 # sum the "e" parameter from long term
+
     ppm_vs_T_pars = [-0.07413, 0.00158]
 
-    ppm_vs_time_pars = [0.00874492067, 100.255995, -0.251789345,
-                        0.0334934847]
+    ppm_vs_time_pars = [0.00881627228, 95.9392102, -0.224413446,
+                        0.0382542123]
+
     if craig_fit:
         offset = 1.3847529679329989e+01
         ppm_vs_T_pars = [-7.3964896025586133e-02, 1.5055740907563737e-03]
@@ -1440,7 +1464,8 @@ def temperature_delay(temptable, divisor,
         print(table_times.min(), table_times.max())
         raise
 
-    clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
+    # clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
+    clock_rate_corr = (1 + ppm_mod / 1000000) * 24000334 / divisor - 1
 
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
     return interp1d(times_fine, delay_sim, fill_value='extrapolate',
