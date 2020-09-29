@@ -117,7 +117,8 @@ def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=Fa
     return clock_offset_table
 
 
-def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
+def spline_detrending(clock_offset_table, temptable, outlier_cuts=None,
+                      fixed_control_points=None):
     tempcorr_idx = np.searchsorted(temptable['met'], clock_offset_table['met'])
     clock_residuals = \
         np.array(clock_offset_table['offset'] -
@@ -137,8 +138,9 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
         clock_offset_table = clock_offset_table[better_points]
         clock_residuals = clock_residuals[better_points]
 
-    detrend_fun = spline_through_data(clock_offset_table['met'],
-                                      clock_residuals, downsample=20)
+    detrend_fun = spline_through_data(
+        clock_offset_table['met'], clock_residuals, downsample=20,
+        fixed_control_points=fixed_control_points)
 
     r_std = residual_roll_std(
         clock_residuals - detrend_fun(clock_offset_table['met']))
@@ -156,7 +158,8 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None):
 
 
 def eliminate_trends_in_residuals(temp_table, clock_offset_table,
-                                  gtis, debug=False):
+                                  gtis, debug=False,
+                                  fixed_control_points=None):
 
     good = clock_offset_table['met'] < np.max(temp_table['met'])
     clock_offset_table = clock_offset_table[good]
@@ -285,9 +288,11 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         table_new['temp_corr'][:] = clock_off_fun(table_new['met'])
 
     log.info("Final detrending...")
+    print(fixed_control_points)
     table_new = spline_detrending(
         clock_offset_table, temp_table,
-        outlier_cuts=[-0.002, -0.001, -0.0006, -0.0004])
+        outlier_cuts=[-0.002, -0.001],
+        fixed_control_points=fixed_control_points)
 
     return table_new
 
@@ -806,16 +811,28 @@ class ClockCorrection():
 
         self.clock_jump_times = \
             np.array([78708320, 79657575, 81043985, 82055671, 293346772])
+        self.fixed_control_points = np.arange(291e6, 295e6, 86400)
+        print(self.fixed_control_points)
+        #  Sum 30 seconds to avoid to exclude these points
+        #  from previous interval
         self.gtis = find_good_time_intervals(
-            self.temptable, self.clock_jump_times)
+            self.temptable, self.clock_jump_times + 30)
+
+        # table_new = temperature_correction_table(
+        #     met_start, met_stop, temptable=temptable_raw,
+        #     freqchange_file=FREQFILE,
+        #     time_resolution=10, craig_fit=False, hdf_dump_file='dump.hdf5')
+        #
+        # table_new = eliminate_trends_in_residuals(
+        #     table_new, clock_offset_table_corr, gtis)
 
         self.temperature_correction_data = \
             temperature_correction_table(
                 self.met_start, self.met_stop,
-                force_divisor=self.force_divisor,
+                # force_divisor=self.force_divisor,
                 time_resolution=10,
                 temptable = self.temptable,
-                hdf_dump_file=self.hdf_dump_file,
+                # hdf_dump_file=self.hdf_dump_file,
                 freqchange_file=self.freqchange_file)
 
         if adjust_absolute_timing:
@@ -854,7 +871,8 @@ class ClockCorrection():
             self.temperature_correction_data,
             load_clock_offset_table(
                 self.clock_offset_file, shift_non_malindi=True), self.gtis,
-            debug=False)
+            debug=False,
+            fixed_control_points=self.fixed_control_points)
         table_new['temp_corr_nodetrend'] = table_new['temp_corr']
         table_new['temp_corr'] = table_new['temp_corr_detrend']
         table_new.remove_column('temp_corr_detrend')
@@ -911,11 +929,22 @@ class ClockCorrection():
                  table_new['met'], edge_order=2),
              'CLOCK_ERR_CORR': clockerr})
 
+        allmets = new_clock_table['TIME']
+
         if not highres:
-            new_clock_table_subsample = new_clock_table[::100]
+            good_for_clockfile = np.zeros(allmets.size, dtype=bool)
+            good_for_clockfile[::100] = True
+            twodays = 86400 * 2
+            for jumptime in self.clock_jump_times:
+                idx0, idx1 = np.searchsorted(
+                    allmets, [jumptime - twodays, jumptime + twodays])
+                # print(idx0, idx1)
+                good_for_clockfile[idx0:idx1] = True
+            new_clock_table_subsample = new_clock_table[good_for_clockfile]
         else:
             new_clock_table_subsample = new_clock_table
         del new_clock_table
+
         if save_nodetrend:
             new_clock_table_nodetrend = Table(
                 {'TIME': table_new['met'],
@@ -927,7 +956,7 @@ class ClockCorrection():
                      table_new['met'])})
             if not highres:
                 new_clock_table_subsample_nodetrend = \
-                    new_clock_table_nodetrend[::100]
+                    new_clock_table_nodetrend[good_for_clockfile]
             else:
                 new_clock_table_subsample_nodetrend = \
                     new_clock_table_nodetrend
@@ -1092,6 +1121,15 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0):
     from bokeh.models import HoverTool
     yint, good_mets = interpolate_clock_function(new_clock_table,
                                                  clock_offset_table['met'])
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.scatter(clock_offset_table[good_mets]['met'],
+                clock_offset_table[good_mets]['offset'] - shift_times)
+    plt.scatter(
+        clock_offset_table[good_mets]['met'],
+        clock_offset_table[good_mets]['offset'] - shift_times + yint)
+    plt.plot(new_clock_table['TIME'], -new_clock_table['CLOCK_OFF_CORR'])
+    plt.show()
 
     yint = - yint
     clock_offset_table = clock_offset_table[good_mets]
@@ -1368,8 +1406,15 @@ def temperature_delay(temptable, divisor,
         print(table_times.min(), table_times.max())
         raise
 
+<<<<<<< HEAD
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
 
+=======
+    # clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
+    clock_rate_corr = (1 + ppm_mod / 1000000) * 24000334 / divisor - 1
+    # clock_rate_corr = (1 + ppm_mod / 1000000) - 1
+    # print(clock_rate_corr)
+>>>>>>> dbbf6fe... Add fixed control points machinery; use new solution based on average divisor 24000334
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
     return interp1d(times_fine, delay_sim, fill_value='extrapolate',
                     bounds_error=False)

@@ -243,7 +243,7 @@ def rolling_std(a, window, pad='center'):
 
 
 def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
-                        downsample=10):
+                        downsample=10, fixed_control_points=None):
     """Pass a spline through the data
 
     Examples
@@ -259,12 +259,16 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
     control_points = \
         np.linspace(lo_lim + 2 * grace_intv, hi_lim - 2 * grace_intv,
                     x.size // downsample)
+    if fixed_control_points is not None and len(fixed_control_points) > 0:
+        print(f'Adding control points: {fixed_control_points}')
+        control_points = np.sort(
+            np.concatenate((control_points, fixed_control_points)))
 
     detrend_fun = LSQUnivariateSpline(
         x, y, t=control_points, k=k,
         bbox=[lo_lim - grace_intv, hi_lim + grace_intv])
 
-    detrend_fun.set_smoothing_factor(smoothing_factor)
+    # detrend_fun.set_smoothing_factor(smoothing_factor)
 
     return detrend_fun
 

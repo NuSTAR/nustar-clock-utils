@@ -74,7 +74,8 @@ def recalc(outfile='save_all.pickle'):
         time_resolution=10, craig_fit=False, hdf_dump_file='dump.hdf5')
 
     table_new = eliminate_trends_in_residuals(
-        table_new, clock_offset_table_corr, gtis)
+        table_new, clock_offset_table_corr, gtis,
+        fixed_control_points=np.arange(291e6, 295e6, 86400))
 
     mets = np.array(table_new['met'])
     start = mets[0]
