@@ -939,7 +939,7 @@ class ClockCorrection():
                 idx0, idx1 = np.searchsorted(
                     allmets, [jumptime - twodays, jumptime + twodays])
                 # print(idx0, idx1)
-                good_for_clockfile[idx0:idx1] = True
+                good_for_clockfile[idx0:idx1:10] = True
             new_clock_table_subsample = new_clock_table[good_for_clockfile]
         else:
             new_clock_table_subsample = new_clock_table
