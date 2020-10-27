@@ -165,7 +165,6 @@ def apply_clock_correction(
                     else:
                         hdu.header[keyname] = corrected_time
 
-
             hdu.header['CREATOR'] = f'NuSTAR Clock Utils - v. {version}'
             hdu.header['DATE'] = Time.now().fits
             hdu.header['PLEPHEM'] = f'JPL-{ephem}'

@@ -52,7 +52,7 @@ def get_best_ephemeris(MJD):
 
 
 def get_crab_ephemeris(MJD, fname=None):
-    log.info("Getting correct ephemeris")
+    log.info(f"Getting correct ephemeris at MJD {MJD}")
     ephem = get_best_ephemeris(MJD)
 
     if fname is None:
@@ -72,22 +72,20 @@ def get_crab_ephemeris(MJD, fname=None):
     return ephem
 
 
-def main(evfile):
-    with fits.open(evfile) as hdul:
-        header = hdul[1].header
-        t0 = high_precision_keyword_read(header, 'TSTART')
-        t1 = high_precision_keyword_read(header, 'TSTOP')
-        mjdref = high_precision_keyword_read(header, 'MJDREF')
-        MJD = (t1 + t0) / 2 / 86400 + mjdref
+def main(args=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="")
 
-    get_crab_ephemeris(
-        MJD, fname=os.path.splitext(os.path.basename(evfile))[0] + '.par')
+    parser.add_argument("fnames", help="Input file names", nargs='+')
+    args = parser.parse_args(args)
 
+    for evfile in args.fnames:
+        with fits.open(evfile, memmap=False) as hdul:
+            header = hdul[1].header
+            t0 = high_precision_keyword_read(header, 'TSTART')
+            t1 = high_precision_keyword_read(header, 'TSTOP')
+            mjdref = high_precision_keyword_read(header, 'MJDREF')
+            MJD = (t1 + t0) / 2 / 86400 + mjdref
 
-if __name__ == '__main__':
-    for fname in sys.argv[1:]:
-        print(f"Looking for crab ephemeris close to {fname}")
-        try:
-            main(fname)
-        except FileNotFoundError:
-            print("File not found")
+        get_crab_ephemeris(
+            MJD, fname=os.path.splitext(os.path.basename(evfile))[0] + '.par')

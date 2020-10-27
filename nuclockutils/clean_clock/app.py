@@ -59,8 +59,8 @@ def recalc(outfile='save_all.pickle'):
         load_and_flag_clock_table(clockfile=CLOCKFILE, shift_non_malindi=True)
 
     table_times = temptable_raw['met']
-    met_start = table_times[0]
-    met_stop = table_times[-1]
+    met_start = clock_offset_table['met'][0]
+    met_stop = clock_offset_table['met'][-1] + 30
     clock_jump_times = np.array([78708320, 79657575, 81043985, 82055671,
                                  293346772])
     clock_jump_times += 30 #  Sum 30 seconds to avoid to exclude these points
@@ -74,7 +74,8 @@ def recalc(outfile='save_all.pickle'):
         time_resolution=10, craig_fit=False, hdf_dump_file='dump.hdf5')
 
     table_new = eliminate_trends_in_residuals(
-        table_new, clock_offset_table_corr, gtis)
+        table_new, clock_offset_table_corr, gtis,
+        fixed_control_points=np.arange(291e6, 295e6, 86400))
 
     mets = np.array(table_new['met'])
     start = mets[0]
@@ -82,6 +83,7 @@ def recalc(outfile='save_all.pickle'):
 
     good_mets = clock_offset_table['met'] < stop
     clock_offset_table = clock_offset_table[good_mets]
+    # print(clock_offset_table['met'][-10:], table_new['met'][-1])
 
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
