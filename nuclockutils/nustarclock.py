@@ -1406,15 +1406,8 @@ def temperature_delay(temptable, divisor,
         print(table_times.min(), table_times.max())
         raise
 
-<<<<<<< HEAD
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
 
-=======
-    # clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
-    clock_rate_corr = (1 + ppm_mod / 1000000) * 24000334 / divisor - 1
-    # clock_rate_corr = (1 + ppm_mod / 1000000) - 1
-    # print(clock_rate_corr)
->>>>>>> dbbf6fe... Add fixed control points machinery; use new solution based on average divisor 24000334
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
     return interp1d(times_fine, delay_sim, fill_value='extrapolate',
                     bounds_error=False)
