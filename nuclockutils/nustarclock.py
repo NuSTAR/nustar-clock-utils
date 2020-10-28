@@ -337,8 +337,10 @@ def residual_roll_std(residuals, window=30):
     >>> np.all(roll_std[4500:] == 0.)
     True
     """
-    r_std = rolling_std(np.diff(residuals), window) / np.sqrt(2)
-    return np.concatenate(([r_std[:1], r_std]))
+    r_std = rolling_std(residuals, window)
+    # r_std = rolling_std(np.diff(residuals), window) / np.sqrt(2)
+    # return np.concatenate(([r_std[:1], r_std]))
+    return r_std
 
 
 def get_malindi_data_except_when_out(clock_offset_table):
