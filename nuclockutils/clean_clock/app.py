@@ -9,7 +9,7 @@ import numpy as np
 from astropy.table import Table
 from astropy.time import Time
 from astropy import log
-from nuclockutils.nustarclock import NUSTAR_MJDREF
+from nuclockutils.nustarclock import NUSTAR_MJDREF, get_bad_points_db
 from nuclockutils.nustarclock import temperature_correction_table, \
     flag_bad_points
 
@@ -492,7 +492,7 @@ def create_app():
             print("Preventing update")
             raise PreventUpdate
 
-        ALL_BAD_POINTS = np.genfromtxt('BAD_POINTS_DB.dat')
+        ALL_BAD_POINTS = get_bad_points_db()
         NEW_BAD_POINTS = []
 
         if selectedData is not None and "No data selected" not in selectedData:
