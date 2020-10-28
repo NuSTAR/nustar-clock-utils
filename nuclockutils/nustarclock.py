@@ -337,8 +337,10 @@ def residual_roll_std(residuals, window=30):
     >>> np.all(roll_std[4500:] == 0.)
     True
     """
-    r_std = rolling_std(np.diff(residuals), window) / np.sqrt(2)
-    return np.concatenate(([r_std[:1], r_std]))
+    r_std = rolling_std(residuals, window)
+    # r_std = rolling_std(np.diff(residuals), window) / np.sqrt(2)
+    # return np.concatenate(([r_std[:1], r_std]))
+    return r_std
 
 
 def get_malindi_data_except_when_out(clock_offset_table):
@@ -1147,19 +1149,21 @@ def interpolate_clock_function(new_clock_table, mets):
     return cubic_interpolation(x, xtab, ytab, yptab), good_mets
 
 
-def plot_scatter(new_clock_table, clock_offset_table, shift_times=0):
+def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
+                 debug=False):
     from bokeh.models import HoverTool
     yint, good_mets = interpolate_clock_function(new_clock_table,
                                                  clock_offset_table['met'])
-    import matplotlib.pyplot as plt
-    plt.figure()
-    plt.scatter(clock_offset_table[good_mets]['met'],
-                clock_offset_table[good_mets]['offset'] - shift_times)
-    plt.scatter(
-        clock_offset_table[good_mets]['met'],
-        clock_offset_table[good_mets]['offset'] - shift_times + yint)
-    plt.plot(new_clock_table['TIME'], -new_clock_table['CLOCK_OFF_CORR'])
-    plt.show()
+    if debug:
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.scatter(clock_offset_table[good_mets]['met'],
+                    clock_offset_table[good_mets]['offset'] - shift_times)
+        plt.scatter(
+            clock_offset_table[good_mets]['met'],
+            clock_offset_table[good_mets]['offset'] - shift_times + yint)
+        plt.plot(new_clock_table['TIME'], -new_clock_table['CLOCK_OFF_CORR'])
+        plt.show()
 
     yint = - yint
     clock_offset_table = clock_offset_table[good_mets]
