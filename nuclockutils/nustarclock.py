@@ -371,7 +371,10 @@ def get_malindi_data_except_when_out(clock_offset_table):
     >>> assert np.all(ufp == [True, True, False])
     >>> assert np.all(bmt == [True, False, False])
     """
-    no_malindi_intvs = [[93681591, 98051312]]
+    # Covers 2012/12/20 - 2013/02/08 Malindi outage
+    # Also covers 2021/04/28 - 2021/05/06 issues with Malindi clock
+    
+    no_malindi_intvs = [[93681591, 98051312],[357295300, 357972500]]
     clock_mets = clock_offset_table['met']
 
     bad_malindi_time = np.zeros(len(clock_mets), dtype=bool)
