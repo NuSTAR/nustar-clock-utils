@@ -3,9 +3,8 @@ scipy
 astropy>=3.2,!=4.0.1,!=4.0.1.post1
 matplotlib
 pandas
-sklearn
-pint-pulsar
-#git+https://github.com/nanograv/pint.git@e5f6b260422898f63c88d636712fcc1cdd76cf20
+scikit-learn
+pint-pulsar=0.7
 tqdm
 jplephem
 datashader
@@ -14,4 +13,4 @@ holoviews
 statsmodels
 h5py
 astroquery
-
+dash
