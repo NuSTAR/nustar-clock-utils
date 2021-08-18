@@ -6,7 +6,11 @@ from astropy import log
 import pint.models
 import pint.toa as toa
 from pint.models import StandardTimingModel
-from pint.observatory.nustar_obs import NuSTARObs
+try:
+    from pint.observatory.nustar_obs import NuSTARObs as SatelliteObs
+except ImportError:
+    from pint.observatory.satellite_obs import SatelliteObs
+
 from astropy.io import fits
 from astropy.time import Time
 from astropy.coordinates import Angle
@@ -79,7 +83,7 @@ def get_dummy_parfile_for_position(orbfile):
 
 
 def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
-    no = NuSTARObs(name="NuSTAR", FPorbname=orbfile, tt2tdb_mode="pint")
+    no = SatelliteObs(name="NuSTAR", FPorbname=orbfile, tt2tdb_mode="pint")
     with fits.open(orbfile) as hdul:
         mjdref = high_precision_keyword_read(hdul[1].header, 'MJDREF')
 

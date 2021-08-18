@@ -3,7 +3,6 @@ import sys
 import pickle
 
 import tqdm
-from hendrics.io import load_events_and_gtis
 from hendrics.efsearch import _fast_phase_fddot
 from hendrics.base import histogram
 
@@ -61,17 +60,11 @@ def calculate_profile_from_phase(phase, nbin=256, expo=None):
 
 
 def get_events_from_fits(evfile):
-    log.info(f"Opening file {evfile}")
-    res = load_events_and_gtis(evfile)
-    events = res.ev_list
-    if events.mission == 'nustar':
-        events.energy = events.pi * 0.04 + 1.6
-    elif events.mission == 'nicer':
-        events.energy = events.pi * 0.01
-    elif events.mission == 'xmm':
-        events.energy = events.cal_pi * 0.001
+    from stingray.events import EventList
 
-    return events
+    log.info(f"Opening file {evfile}")
+
+    return EventList.read(evfile, format_="hea")
 
 
 def prepare_TOAs(mjds, ephem):
