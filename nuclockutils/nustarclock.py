@@ -844,7 +844,7 @@ class ClockCorrection():
         self.plot_file = label + "_clock_adjustment.png"
 
         self.clock_jump_times = \
-            np.array([78708320, 79657575, 81043985, 82055671, 293346772])
+            np.array([78708320, 79657575, 81043985, 82055671, 293346772, 392036160])
         self.fixed_control_points = np.arange(291e6, 295e6, 86400)
         #  Sum 30 seconds to avoid to exclude these points
         #  from previous interval
