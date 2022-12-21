@@ -845,7 +845,7 @@ class ClockCorrection():
 
         self.clock_jump_times = \
             np.array([78708320, 79657575, 81043985, 82055671, 293346772,
-            392200784, 394825882, 395304135, 408299422])
+            392200784, 394825882, 395304135,407914525, 408299422])
         self.fixed_control_points = np.arange(291e6, 295e6, 86400)
         #  Sum 30 seconds to avoid to exclude these points
         #  from previous interval
