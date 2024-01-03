@@ -212,6 +212,10 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         table_new = temp_table[temp_idx_start:temp_idx_end]
         cltable_new = clock_offset_table[cl_idx_start:cl_idx_end]
         met = cltable_new['met']
+        
+        if len(met) < 2:
+            continue
+        
         residuals = clock_residuals[cl_idx_start:cl_idx_end]
         met0 = met[0]
         met_rescale = (met - met0)/(met[-1] - met0)
