@@ -9,7 +9,8 @@ from astropy.table import Table, vstack
 import pandas as pd
 from astropy.time import Time
 
-from scipy.interpolate import interp1d
+from scipy.interpolate import PchipInterpolator
+
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 from scipy.stats import norm
@@ -274,7 +275,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         # print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
 
     bti_list = [[g0, g1] for g0, g1 in zip(gtis[:-1, 1], gtis[1:, 0])]
-    bti_list += [[gtis[-1, 1], clock_offset_table['met'][-1] + 10]]
+    bti_list += [[gtis[-1, 1], max(clock_offset_table['met'][-1], temp_table['met'][-1]) + 10000]]
     btis = np.array(bti_list)
 
     # Interpolate the solution along bad time intervals
@@ -323,9 +324,9 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
         order = np.argsort(clock_tim)
 
-        clock_off_fun = interp1d(
-            clock_tim[order], clock_off[order], kind='linear',
-            assume_sorted=True)
+        clock_off_fun = PchipInterpolator(
+            clock_tim[order], clock_off[order],
+            extrapolate=True)
         table_new['temp_corr'][:] = clock_off_fun(table_new['met'])
 
     log.info("Final detrending...")
@@ -905,8 +906,8 @@ class ClockCorrection():
     def temperature_correction_fun(self, adjust=False):
         data = self.temperature_correction_data
 
-        return interp1d(np.array(data['met']), np.array(data['temp_corr']),
-                        fill_value="extrapolate", bounds_error=False)
+        return PchipInterpolator(np.array(data['met']), np.array(data['temp_corr']),
+                        extrapolate=True)
 
     def adjust_temperature_correction(self):
         table_new = eliminate_trends_in_residuals(
@@ -948,9 +949,10 @@ class ClockCorrection():
 
         roll_std = residual_roll_std(clock_residuals_detrend[good])
         control_points = clock_offset_table['met'][good]
-        clock_err_fun = interp1d(control_points, roll_std,
-                                 assume_sorted=True,
-                                 bounds_error=False, fill_value='extrapolate')
+        clock_err_fun = PchipInterpolator(
+            control_points,
+            roll_std,
+            extrapolate=True)
 
         clockerr = clock_err_fun(table_new['met'])
 
@@ -1527,8 +1529,10 @@ def temperature_delay(temptable, divisor,
 
     temperature = temptable['temperature_smooth']
 
-    temp_fun = interp1d(table_times, temperature,
-                        assume_sorted=True)
+    temp_fun = PchipInterpolator(
+        table_times,
+        temperature,
+        extrapolate=False)
 
     dt = time_resolution
     times_fine = np.arange(met_start, met_stop, dt)
@@ -1548,8 +1552,7 @@ def temperature_delay(temptable, divisor,
     clock_rate_corr = (1 + ppm_mod / 1000000) * 24000000 / divisor - 1
 
     delay_sim = simpcumquad(times_fine, clock_rate_corr)
-    return interp1d(times_fine, delay_sim, fill_value='extrapolate',
-                    bounds_error=False)
+    return PchipInterpolator(times_fine, delay_sim, extrapolate=True)
 
 
 def temperature_correction_table(met_start, met_stop,
