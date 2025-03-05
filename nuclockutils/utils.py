@@ -1,4 +1,3 @@
-
 from functools import lru_cache
 import os
 import numpy as np
@@ -10,6 +9,15 @@ from astropy.time import Time
 from scipy.interpolate import LSQUnivariateSpline
 from numba import vectorize
 
+try:
+    from astroquery import heasarc
+    # Check if the method exists
+    heasarc.Heasarc().query_tap
+    HAS_AQ_TAP = True
+except AttributeError:
+    HAS_AQ_TAP = False
+except ImportError:
+    pass
 
 NUSTAR_MJDREF = np.longdouble("55197.00076601852")
 
@@ -184,25 +192,32 @@ def filter_with_region(evfile, regionfile, debug_plot=True,
 def get_obsid_list_from_heasarc(cache_file='heasarc.hdf5'):
     try:
         heasarc = Heasarc()
-        all_nustar_obs = heasarc.query_object(
-            '*', 'numaster', resultmax=100000,
-            fields='OBSID,TIME,END_TIME,NAME,OBSERVATION_MODE,OBS_TYPE')
+        if HAS_AQ_TAP:
+            query = """SELECT obsid,time,end_time,name,observation_mode,obs_type FROM numaster"""
+            all_nustar_obs = heasarc.query_tap(
+                query, maxrec=100000).to_table()
+        else:
+            all_nustar_obs = heasarc.query_object(
+                '*', 'numaster', resultmax=100000,
+                fields='obsid,time,end_time,name,observation_mode,obs_type')
+            for col in all_nustar_obs.colnames:
+                all_nustar_obs.rename_column(col, col.lower())
     except Exception:
         return Table({
-            'TIME': [0], 'TIME_END': [0], 'MET': [0], 'NAME': [""],
-            'OBSERVATION_MODE': [""], 'OBS_TYPE': [""], 'OBSID': [""]})
+            'time': [0], 'time_end': [0], 'met': [0], 'name': [""],
+            'observation_mode': [""], 'obs_type': [""], 'obsid': [""]})
 
-    all_nustar_obs = all_nustar_obs[all_nustar_obs["TIME"] > 0]
-    for field in 'OBSID,NAME,OBSERVATION_MODE,OBS_TYPE'.split(','):
+    all_nustar_obs = all_nustar_obs[all_nustar_obs["time"] > 0]
+    for field in "obsid,name,observation_mode,obs_type".split(","):
         all_nustar_obs[field] = [om.strip() for om in all_nustar_obs[field]]
 
-    mjds = Time(np.array(all_nustar_obs['TIME']), format='mjd')
-    mjd_ends = Time(np.array(all_nustar_obs['END_TIME']), format='mjd')
+    mjds = Time(np.array(all_nustar_obs['time']), format='mjd')
+    mjd_ends = Time(np.array(all_nustar_obs['end_time']), format='mjd')
 
-    # all_nustar_obs = all_nustar_obs[all_nustar_obs["OBSERVATION_MODE"] == 'SCIENCE']
-    all_nustar_obs['MET'] = np.array(all_nustar_obs['TIME'] - NUSTAR_MJDREF) * 86400
-    all_nustar_obs['DATE'] = mjds.fits
-    all_nustar_obs['DATE-END'] = mjd_ends.fits
+    # all_nustar_obs = all_nustar_obs[all_nustar_obs["observation_mode"] == 'SCIENCE']
+    all_nustar_obs['met'] = np.array(all_nustar_obs['time'] - NUSTAR_MJDREF) * 86400
+    all_nustar_obs['date'] = mjds.fits
+    all_nustar_obs['date-end'] = mjd_ends.fits
 
     return all_nustar_obs
 

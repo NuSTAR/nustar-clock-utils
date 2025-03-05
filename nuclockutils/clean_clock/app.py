@@ -46,12 +46,12 @@ def recalc(outfile='save_all.pickle'):
     all_nustar_obs.sort('MET')
 
     all_nustar_obs['text'] = [
-        (f"Source: {aobs['NAME']}<br>"+
-         f"ObsID: {aobs['OBSID']}<br>"+
-         f"Start: {aobs['DATE']} (MJD {aobs['TIME']})<br>"+
-         f"End: {aobs['DATE-END']} (MJD {aobs['END_TIME']})<br>"+
-         f"Type: {aobs['OBS_TYPE']}<br>"+
-         f"Mode: {aobs['OBSERVATION_MODE']}<br>")
+        (f"Source: {aobs['name']}<br>"+
+         f"ObsID: {aobs['obsid']}<br>"+
+         f"Start: {aobs['date']} (MJD {aobs['time']})<br>"+
+         f"End: {aobs['date-end']} (MJD {aobs['end_time']})<br>"+
+         f"Type: {aobs['obs_type']}<br>"+
+         f"Mode: {aobs['observation_mode']}<br>")
         for aobs in all_nustar_obs]
 
     clock_offset_table = \
@@ -158,7 +158,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
         else:
             all_nustar_obs[col][-1] *= 0
 
-    idx = np.searchsorted(all_nustar_obs['MET'][1:], table_new['met'])
+    idx = np.searchsorted(all_nustar_obs['met'][1:], table_new['met'])
 
     all_nustar_obs_reindex = all_nustar_obs[idx]
     text = np.array([f"MJD {sec_to_mjd(met)}<br>UT {sec_to_ut(met)}<br><br>{string}" for met, string in zip(table_new["met"], all_nustar_obs_reindex['text'])])
@@ -204,7 +204,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
 
     all_nustar_obs = all_nustar_obs[:-1]
 
-    idx = np.searchsorted(all_nustar_obs['MET'][:-1],
+    idx = np.searchsorted(all_nustar_obs['met'][:-1],
                           np.array(all_data['met']))
 
     all_nustar_obs_reindex = all_nustar_obs[idx]
