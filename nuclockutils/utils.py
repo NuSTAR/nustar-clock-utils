@@ -286,7 +286,7 @@ def rolling_std(a, window, pad='center'):
 
 
 def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
-                        downsample=20, fixed_control_points=None):
+                        downsample=10, fixed_control_points=None):
     """Pass a spline through the data
 
     Examples

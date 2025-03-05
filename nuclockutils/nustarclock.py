@@ -744,6 +744,9 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     if temperature_file is None:
         temperature_file = _look_for_temptable()
     log.info(f"Reading temperature_information from {temperature_file}")
+    log.info(f"dt={str(dt)}")
+    log.info(f"mjdstart={mjdstart}")
+    log.info(f"mjdstop={mjdstop}")
     ext = splitext_improved(temperature_file)[1]
     if ext in ['.csv']:
         temptable = read_csv_temptable(mjdstart, mjdstop, temperature_file)
@@ -785,9 +788,9 @@ def load_temptable(temptable_name):
 
     if IS_CSV and os.path.exists(hdf5_name):
         IS_CSV = False
-        temptable_raw = read_temptable(hdf5_name)
+        temptable_raw = read_temptable(hdf5_name, dt=10)
     else:
-        temptable_raw = read_temptable(temptable_name)
+        temptable_raw = read_temptable(temptable_name, dt=10)
 
     if IS_CSV:
         log.info(f"Saving temperature data to {hdf5_name}")
@@ -1576,7 +1579,7 @@ def temperature_correction_table(met_start, met_stop,
         mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
         temptable = read_temptable(mjdstart=mjdstart,
                                    mjdstop=mjdstop,
-                                   temperature_file=temptable)
+                                   temperature_file=temptable, dt=10)
     if force_divisor is None:
         freq_changes_table = \
             read_freq_changes_table(freqchange_file=freqchange_file)
