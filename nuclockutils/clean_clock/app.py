@@ -22,8 +22,8 @@ from nuclockutils.nustarclock import load_temptable, load_freq_changes, \
     eliminate_trends_in_residuals
 
 import dash
-import dash_core_components as dcc
-import dash_html_components as html
+from dash import dcc
+from dash import html
 from dash.dependencies import Input, Output
 from dash.exceptions import PreventUpdate
 from textwrap import dedent as d
