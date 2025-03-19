@@ -43,7 +43,8 @@ def recalc(outfile='save_all.pickle'):
 
     log.info("Querying history of NuSTAR observations...")
     all_nustar_obs = get_obsid_list_from_heasarc()
-    all_nustar_obs.sort('MET')
+    print(all_nustar_obs)
+    all_nustar_obs.sort('met')
 
     all_nustar_obs['text'] = [
         (f"Source: {aobs['name']}<br>"+
@@ -556,7 +557,7 @@ def create_app():
                 'height': 300,
                 'yaxis': {'title': 'TCXO Temperature',
                     'type': 'linear' if axis_type == 'Linear' else 'log'},
-                'xaxis': {'title': 'MET', 'showgrid': False,
+                'xaxis': {'title': 'met', 'showgrid': False,
                 'margin':{'t': 20}}
 
             }
@@ -574,7 +575,7 @@ def create_app():
                 'height': 300,
                 'yaxis': {'title': 'TCXO Temp Gradient',
                     'type': 'linear'},
-                'xaxis': {'title': 'MET', 'showgrid': False,
+                'xaxis': {'title': 'met', 'showgrid': False,
                 'margin':{'t': 20}}
 
             }
