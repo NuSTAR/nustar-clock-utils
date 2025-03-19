@@ -274,10 +274,10 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
         # print(f'df/f = {(p(stop) - p(start)) / (stop - start)}')
 
-    bti_list = [[g0, g1] for g0, g1 in zip(gtis[:-1, 1], gtis[1:, 0])]
+    bti_list = [[0, 77674700]]
+    bti_list += [[g0, g1] for g0, g1 in zip(gtis[:-1, 1], gtis[1:, 0])]
     bti_list += [[gtis[-1, 1], max(clock_offset_table['met'][-1], temp_table['met'][-1]) + 10000]]
     btis = np.array(bti_list)
-
     # Interpolate the solution along bad time intervals
     for g in btis:
         start, stop = g
@@ -285,49 +285,52 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
         temp_idx_start, temp_idx_end = \
             np.searchsorted(temp_table['met'], g)
-        if temp_idx_end - temp_idx_start == 0 and \
-                temp_idx_end < len(temp_table):
-            continue
-        table_new = temp_table[temp_idx_start:temp_idx_end]
         cl_idx_start, cl_idx_end = \
             np.searchsorted(clock_offset_table['met'], g)
-        local_clockoff = clock_offset_table[cl_idx_start - 1:cl_idx_end + 1]
-        clock_off = local_clockoff['offset']
-        clock_tim = local_clockoff['met']
-
-        last_good_tempcorr = temp_table['temp_corr'][temp_idx_start - 1]
-        last_good_time = temp_table['met'][temp_idx_start - 1]
-        if temp_idx_end < temp_table['temp_corr'].size:
-            next_good_tempcorr = temp_table['temp_corr'][temp_idx_end + 1]
-            next_good_time = temp_table['met'][temp_idx_end + 1]
-            clock_off = np.concatenate(
-                ([last_good_tempcorr], clock_off, [next_good_tempcorr]))
-            clock_tim = np.concatenate(
-                ([last_good_time], clock_tim, [next_good_time]))
-        else:
-            clock_off = np.concatenate(
-                ([last_good_tempcorr], clock_off))
-            clock_tim = np.concatenate(
-                ([last_good_time], clock_tim))
-
-            next_good_tempcorr = clock_off[-1]
-            next_good_time = clock_tim[-1]
-
-        if cl_idx_end - cl_idx_start < 2:
-            log.info("Not enough good clock measurements. Interpolating")
-            m = (next_good_tempcorr - last_good_tempcorr) / \
-              (next_good_time - last_good_time)
-            q = last_good_tempcorr
-            table_new['temp_corr'][:] = \
-                q + (table_new['met'] - last_good_time) * m
+        if temp_idx_end - temp_idx_start == 0 and \
+                temp_idx_end < len(temp_table) and temp_idx_start > 0:
             continue
+        else:
+            table_new = temp_table[temp_idx_start:temp_idx_end]
 
-        order = np.argsort(clock_tim)
+            last_good_tempcorr = temp_table['temp_corr'][temp_idx_start - 1]
+            last_good_time = temp_table['met'][temp_idx_start - 1]
 
-        clock_off_fun = PchipInterpolator(
-            clock_tim[order], clock_off[order],
-            extrapolate=True)
-        table_new['temp_corr'][:] = clock_off_fun(table_new['met'])
+            local_clockoff = clock_offset_table[max(cl_idx_start - 1, 0):cl_idx_end + 1]
+            clock_off = local_clockoff['offset']
+            clock_tim = local_clockoff['met']
+
+            if temp_idx_end < temp_table['temp_corr'].size:
+                next_good_tempcorr = temp_table['temp_corr'][temp_idx_end + 1]
+                next_good_time = temp_table['met'][temp_idx_end + 1]
+                clock_off = np.concatenate(
+                    ([last_good_tempcorr], clock_off, [next_good_tempcorr]))
+                clock_tim = np.concatenate(
+                    ([last_good_time], clock_tim, [next_good_time]))
+            else:
+                clock_off = np.concatenate(
+                    ([last_good_tempcorr], clock_off))
+                clock_tim = np.concatenate(
+                    ([last_good_time], clock_tim))
+
+                next_good_tempcorr = clock_off[-1]
+                next_good_time = clock_tim[-1]
+
+            if cl_idx_end - cl_idx_start < 2:
+                log.info("Not enough good clock measurements. Interpolating")
+                m = (next_good_tempcorr - last_good_tempcorr) / \
+                (next_good_time - last_good_time)
+                q = last_good_tempcorr
+                table_new['temp_corr'][:] = \
+                    q + (table_new['met'] - last_good_time) * m
+                continue
+
+            order = np.argsort(clock_tim)
+
+            clock_off_fun = PchipInterpolator(
+                clock_tim[order], clock_off[order],
+                extrapolate=True)
+            table_new['temp_corr'][:] = clock_off_fun(table_new['met'])
 
     log.info("Final detrending...")
 
@@ -335,7 +338,6 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         clock_offset_table, temp_table,
         outlier_cuts=[-0.002, -0.001],
         fixed_control_points=fixed_control_points)
-
     return table_new
 
 
