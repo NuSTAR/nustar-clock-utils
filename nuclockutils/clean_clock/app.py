@@ -43,7 +43,7 @@ def recalc(outfile='save_all.pickle'):
 
     log.info("Querying history of NuSTAR observations...")
     all_nustar_obs = get_obsid_list_from_heasarc()
-    print(all_nustar_obs)
+
     all_nustar_obs.sort('met')
 
     all_nustar_obs['text'] = [
@@ -64,7 +64,7 @@ def recalc(outfile='save_all.pickle'):
     met_start = clock_offset_table['met'][0]
     met_stop = clock_offset_table['met'][-1] + 30
     clock_jump_times = \
-        np.array([78708320, 79657575, 81043985, 82055671, 293346772,
+        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772,
                   392200784, 394825882, 395304135, 407914525, 408299422])
     clock_jump_times += 30 #  Sum 30 seconds to avoid to exclude these points
                            #  from previous interval
@@ -258,6 +258,9 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
                 'marker': {'color': color, 'size': 3}
             }), row, 1)
 
+    # bad_intervals = [[0, 77.767e6]]
+    # bad_intervals = np.concatenate((bad_intervals, np.array(
+    #     [[g0, g1] for g0, g1 in zip(gti[:-1, 1], gti[1:, 0])])))
     bad_intervals = np.array(
         [[g0, g1] for g0, g1 in zip(gti[:-1, 1], gti[1:, 0])])
 
