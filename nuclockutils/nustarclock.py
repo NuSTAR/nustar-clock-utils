@@ -97,8 +97,13 @@ def find_good_time_intervals(temperature_table,
         temp_gtis = temperature_table.meta['gti']
 
     gtis = cross_two_gtis(temp_gtis, clock_gtis)
+    lengths = gtis[:, 1] - gtis[:, 0]
+    # ensure at least half a day duration for GTIs
+    good = lengths > 43200
+    if not np.all(good):
+        raise log.info(f"Some GTIs are too short. cleaning up: {gti[~good]}")
 
-    return gtis
+    return gtis[good]
 
 
 def calculate_stats(all_data):
@@ -214,7 +219,8 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         cl_idx_start, cl_idx_end = \
             np.searchsorted(clock_offset_table['met'], g)
 
-        if cl_idx_end - cl_idx_start == 0:
+        if cl_idx_end - cl_idx_start < 3:
+            log.info("Too few clock measurements in this interval")
             continue
 
         temp_idx_start, temp_idx_end = \
@@ -223,9 +229,6 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         table_new = temp_table[temp_idx_start:temp_idx_end]
         cltable_new = clock_offset_table[cl_idx_start:cl_idx_end]
         met = cltable_new['met']
-
-        if len(met) < 2:
-            continue
 
         residuals = clock_residuals[cl_idx_start:cl_idx_end]
         met0 = met[0]
@@ -289,6 +292,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
             np.searchsorted(clock_offset_table['met'], g)
         if temp_idx_end - temp_idx_start == 0 and \
                 temp_idx_end < len(temp_table) and temp_idx_start > 0:
+            log.info("No temperature measurements in this interval")
             continue
         else:
             table_new = temp_table[temp_idx_start:temp_idx_end]
