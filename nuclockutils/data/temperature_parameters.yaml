@@ -40,6 +40,7 @@ v2:
     - -0.07091440
     - 0.21546493
 
+# March 2025
 latest:
   T0: 13.500954827811444  # ± 0.015
   # offset: 13.9046099 -0.01239952 # sum the "e" parameter from long term
