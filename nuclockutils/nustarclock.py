@@ -101,7 +101,7 @@ def find_good_time_intervals(temperature_table,
     # ensure at least half a day duration for GTIs
     good = lengths > 43200
     if not np.all(good):
-        raise log.info(f"Some GTIs are too short. cleaning up: {gti[~good]}")
+        log.info(f"Some GTIs are too short. cleaning up: {gtis[~good]}")
 
     return gtis[good]
 
