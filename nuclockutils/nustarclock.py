@@ -567,6 +567,11 @@ def temperature_gtis(temperature_table, max_distance=600):
     temp_condition = np.concatenate(
         ([False], np.diff(temperature_table['met']) > max_distance, [False]))
 
+    bad_times = [[482.2896e6, 482.2958e6]]
+    for b in bad_times:
+        bad = np.where((temperature_table['met'] > b[0]) & (temperature_table['met'] < b[1]))
+        temp_condition[bad[0]] = True
+
     temp_edges_l = np.concatenate((
         [temperature_table['met'][0]],
         temperature_table['met'][temp_condition[:-1]]))
@@ -579,6 +584,7 @@ def temperature_gtis(temperature_table, max_distance=600):
         temp_edges_l, temp_edges_h)))
 
     length = temp_gtis[:, 1] - temp_gtis[:, 0]
+
     return temp_gtis[length > 0]
 
 
