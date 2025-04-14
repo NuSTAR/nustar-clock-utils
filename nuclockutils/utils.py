@@ -316,16 +316,22 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
 
     control_points = \
         np.linspace(lo_lim + 2 * grace_intv, hi_lim - 2 * grace_intv,
-                    x.size // downsample)
+                    int(x.size // downsample))
+
     if fixed_control_points is not None and len(fixed_control_points) > 0:
-        print(f'Adding control points: {fixed_control_points}')
+        log.debug(f'Adding fixed control points: {fixed_control_points}')
         control_points = np.sort(
             np.concatenate((control_points, fixed_control_points)))
 
-    detrend_fun = LSQUnivariateSpline(
-        x, y, t=control_points, k=k,
-        bbox=[lo_lim, hi_lim])
-
+    try:
+        detrend_fun = LSQUnivariateSpline(
+            x, y, t=control_points, k=k,
+            bbox=[lo_lim, hi_lim])
+    except ValueError as e:
+        log.error(f"Error in LSQUnivariateSpline: {e};\nDecreasing the number of control points"
+                  r" by 10% and trying again.")
+        return spline_through_data(x, y, k=k, grace_intv=grace_intv,
+                        downsample=downsample * 1.5, fixed_control_points=fixed_control_points)
     return detrend_fun
 
 
