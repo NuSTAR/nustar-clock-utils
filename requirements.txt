@@ -10,7 +10,7 @@ tqdm
 jplephem
 datashader
 bokeh
-holoviews
+holoviews>=1.18
 statsmodels
 h5py
 astroquery
