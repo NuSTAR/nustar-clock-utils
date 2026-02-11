@@ -58,6 +58,7 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     True
     """
     if not os.path.exists(db_file):
+        all_data['flag'] = np.zeros(len(all_data), dtype=bool)
         return all_data
     log.info("Flagging bad points...")
 
@@ -605,7 +606,7 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     log.info(f"Reading frequency changes from {freqchange_file}")
     freq_changes_table = Table.read(freqchange_file,
                                 format='csv', delimiter=' ',
-                                comment="\s*#",
+                                comment=r"\s*#",
                                 names=['uxt', 'met', 'divisor'])
     log.info("Correcting known bad frequency points")
     for time in FREQ_CHANGE_DB['delete']:

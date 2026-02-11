@@ -642,7 +642,12 @@ def main(args=None):
 
     print("Creating app")
     app = create_app()
-    app.run_server(debug=True)
+    try:
+        app.run(debug=True)
+    except Exception as e:
+        # Compatibility with old versions
+        app.run_server(debug=True)
+
 
 
 if __name__ == '__main__':
