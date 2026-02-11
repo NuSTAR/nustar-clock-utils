@@ -15,7 +15,7 @@ from astropy.io import fits
 import matplotlib.pyplot as plt
 from pint import models
 from stingray.pulse.pulsar import _load_and_prepare_TOAs, get_model
-from scipy.interpolate import interp1d
+from scipy.interpolate import PchipInterpolator
 
 
 
@@ -214,8 +214,7 @@ def get_phase_from_ephemeris_file(mjdstart, mjdstop, parfile,
     phases = phase_int + phase_frac
 
     correction_mjd_rough = \
-        interp1d(mjds, phases,
-                  fill_value="extrapolate")
+        PchipInterpolator(mjds, phases, extrapolate=True)
     return correction_mjd_rough
 
 
@@ -264,9 +263,9 @@ def main(args=None):
                 args.expocorr, args.parfile,
                 nbin=nbin * 4, n_phot_max=300 * 4 * nbin)
         if expo.size != nbin:
-            expo_fun = interp1d(
+            expo_fun = PchipInterpolator(
                 np.linspace(0, 1, expo.size + 1) + 0.5 / expo.size,
-                np.concatenate((expo, [expo[0]])))
+                np.concatenate((expo, [expo[0]])), extrapolate=True)
             expo = expo_fun(
                 np.linspace(0, 1, nbin + 1)[:nbin] + 0.5 / nbin)
     log.info(f"Loading {evfile}")
