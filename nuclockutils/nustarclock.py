@@ -1260,10 +1260,9 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
         ('UT', '@utc'),
     ]
     hover = HoverTool(tooltips=tooltips)
-
     plot_0 = all_data.to.scatter('met', ['offset', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
-        color_index='station', alpha=0.5, muted_line_alpha=0.1,
+        alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
     plot_0a = hv.Curve(dict(x=clock_mets, y=yint),
                        group='station', label='Clock corr').opts(color="k")
@@ -1289,7 +1288,7 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
                                      ('utc', 'UT')])
     plot_1 = all_data_res.to.scatter('met', ['residual', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
-        color_index='station', alpha=0.5, muted_line_alpha=0.1,
+        alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station').hist(["residual"])
 
     plot_1b = hv.Curve({'x': new_clock_table['TIME'],
