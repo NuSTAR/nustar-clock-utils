@@ -51,7 +51,7 @@ def show_all(files, MET1, MET2):
         corr[good_mets] = good_corr
 
         good = good & good_mets
-        plt.plot(mets, corr, label=fname)
+        plt.plot(mets, corr * 1e3, label=fname)
     plt.xlabel("MET")
     plt.ylabel("Correction (ms)")
     plt.legend()
