@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from astropy.table import Table
-from scipy.interpolate import interp1d
+from scipy.interpolate import PchipInterpolator
 from astropy import log
 import pint.models
 import pint.toa as toa
@@ -39,18 +39,15 @@ def get_orbital_functions(orbfile):
         lat, lon, alt = (geod[:, 0] * u.rad).to(u.deg), (
                     geod[:, 1] * u.rad).to(u.deg), geod[:, 2] * 1000 * u.m
 
-    lat_fun = interp1d(times.mjd, lat, bounds_error=False,
-                       fill_value='extrapolate')
-    lon_fun = interp1d(times.mjd, lon, bounds_error=False,
-                       fill_value='extrapolate')
-    alt_fun = interp1d(times.mjd, alt, bounds_error=False,
-                       fill_value='extrapolate')
+    lat_fun = PchipInterpolator(times.mjd, lat, extrapolate=True)
+    lon_fun = PchipInterpolator(times.mjd, lon, extrapolate=True)
+    alt_fun = PchipInterpolator(times.mjd, alt, extrapolate=True)
     gst = times.sidereal_time('apparent', 'greenwich')
     lst = lon.to(u.hourangle) + gst.to(u.hourangle)
     lst[lst.value > 24] -= 24 * u.hourangle
     lst[lst.value < 0] += 24 * u.hourangle
-    lst_fun = interp1d(times.mjd, lst, bounds_error=False,
-                       fill_value='extrapolate')
+    lst_fun = PchipInterpolator(times.mjd, lst,
+                       extrapolate=True)
 
     orbfunc = OrbitalFunctions()
     orbfunc.lat_fun = lat_fun
@@ -108,9 +105,11 @@ def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
         tdb_method='default',
     )
     bats = modelin.get_barycentric_toas(ts)
-    return interp1d(mets, (bats.value - mjds) * 86400,
-        assume_sorted=True, bounds_error=False, fill_value='extrapolate',
-                    kind='quadratic')
+
+    return PchipInterpolator(
+        mets,
+        (bats.value - mjds),
+        extrapolate=True)
 
 
 def correct_times(times, bary_fun, clock_fun=None):
@@ -141,8 +140,7 @@ def apply_clock_correction(
             clocktable = Table.read(clockfile, hdu=hduname)
             clock_corr, _ = \
                 interpolate_clock_function(clocktable, unique_times)
-            clock_fun = interp1d(unique_times, clock_corr,
-                assume_sorted=True, bounds_error=False, fill_value='extrapolate')
+            clock_fun = PchipInterpolator(unique_times, clock_corr, extrapolate=True)
         elif clockfile is not None and not os.path.exists(clockfile):
             raise FileNotFoundError(f"Clock file {clockfile} not found")
 

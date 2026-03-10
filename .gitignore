@@ -61,3 +61,5 @@ distribute-*.tar.gz
 
 # Mac OSX
 .DS_Store
+bu*
+_version.py

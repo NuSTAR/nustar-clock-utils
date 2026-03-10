@@ -58,6 +58,7 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     True
     """
     if not os.path.exists(db_file):
+        all_data['flag'] = np.zeros(len(all_data), dtype=bool)
         return all_data
     log.info("Flagging bad points...")
 
@@ -605,7 +606,7 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     log.info(f"Reading frequency changes from {freqchange_file}")
     freq_changes_table = Table.read(freqchange_file,
                                 format='csv', delimiter=' ',
-                                comment="\s*#",
+                                comment=r"\s*#",
                                 names=['uxt', 'met', 'divisor'])
     log.info("Correcting known bad frequency points")
     for time in FREQ_CHANGE_DB['delete']:
@@ -1259,10 +1260,9 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
         ('UT', '@utc'),
     ]
     hover = HoverTool(tooltips=tooltips)
-
     plot_0 = all_data.to.scatter('met', ['offset', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
-        color_index='station', alpha=0.5, muted_line_alpha=0.1,
+        alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station')
     plot_0a = hv.Curve(dict(x=clock_mets, y=yint),
                        group='station', label='Clock corr').opts(color="k")
@@ -1288,7 +1288,7 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
                                      ('utc', 'UT')])
     plot_1 = all_data_res.to.scatter('met', ['residual', 'mjd', 'doy', 'utc'],
                                  groupby='station').options(
-        color_index='station', alpha=0.5, muted_line_alpha=0.1,
+        alpha=0.5, muted_line_alpha=0.1,
         muted_fill_alpha=0.03).overlay('station').hist(["residual"])
 
     plot_1b = hv.Curve({'x': new_clock_table['TIME'],
