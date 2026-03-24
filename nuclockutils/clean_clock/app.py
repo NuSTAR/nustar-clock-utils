@@ -64,7 +64,7 @@ def recalc(outfile='save_all.pickle'):
     met_start = clock_offset_table['met'][0]
     met_stop = clock_offset_table['met'][-1] + 30
     clock_jump_times = \
-        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772,
+        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772, 305080000,
                   392200784, 394825882, 395304135, 407914525, 408299422])
     clock_jump_times += 30 #  Sum 30 seconds to avoid to exclude these points
                            #  from previous interval
@@ -100,6 +100,7 @@ def recalc(outfile='save_all.pickle'):
         np.array(
             clock_offset_table['offset'] - table_new['temp_corr'][tempcorr_idx]
         )
+
     clock_residuals_detrend = np.array(
         clock_offset_table['offset'] - table_new['temp_corr_detrend'][tempcorr_idx])
 

@@ -318,7 +318,6 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
         np.linspace(lo_lim + 2 * grace_intv, hi_lim - 2 * grace_intv,
                     int(max(x.size // downsample, k + 1)))
 
-    control_points = np.r_[(x[0],)*(k+1), control_points, (x[-1],)*(k+1)]
 
     if fixed_control_points is not None and len(fixed_control_points) > 0:
         good_fcp = fixed_control_points[(fixed_control_points > lo_lim) & (fixed_control_points < hi_lim)]
@@ -332,12 +331,14 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
     flag_ctrl_pts  = np.ones(control_points.size, dtype=bool)
     t_idxs = np.searchsorted(x, control_points)
     for i, (id0, id1) in enumerate(zip(t_idxs[:-1], t_idxs[1:])):
-        if not id1 > id0 and np.any((x[id0:id1] > control_points[i]) & (x[id0:id1] < control_points[i + 1])):
+        if not id1 > id0 or not np.any((x[id0:id1+1] > control_points[i]) & (x[id0:id1 + 1] < control_points[i + 1])):
             # Schoenberg-Whitney condition is not satisfied, we need to remove this control point
             log.info(f"No data between {control_points[i]} and {control_points[i + 1]}, removing control point.")
             flag_ctrl_pts[i] = False
 
     control_points = control_points[flag_ctrl_pts]
+
+    control_points = np.r_[(x[0]- 1,)*(k+1), control_points, (x[-1] + 1,)*(k+1)]
 
     detrend_fun = make_lsq_spline(
         x, y, t=control_points, k=k)
