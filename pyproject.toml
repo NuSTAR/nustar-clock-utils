@@ -16,7 +16,7 @@ authors = [
     { name = "Matteo Bachetti", email = "matteo.bachetti@inaf.it" },
 ]
 dependencies = [
-    "numpy<2.0",
+    "numpy",
     "scipy",
     "astropy",
     "matplotlib",

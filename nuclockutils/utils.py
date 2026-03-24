@@ -80,13 +80,13 @@ def splitext_improved(path):
     """
     Examples
     --------
-    >>> np.all(splitext_improved("a.tar.gz") ==  ('a', '.tar.gz'))
+    >>> bool(np.all(splitext_improved("a.tar.gz") ==  ('a', '.tar.gz')))
     True
-    >>> np.all(splitext_improved("a.tar") ==  ('a', '.tar'))
+    >>> bool(np.all(splitext_improved("a.tar") ==  ('a', '.tar')))
     True
-    >>> np.all(splitext_improved("a.f/a.tar") ==  ('a.f/a', '.tar'))
+    >>> bool(np.all(splitext_improved("a.f/a.tar") ==  ('a.f/a', '.tar')))
     True
-    >>> np.all(splitext_improved("a.a.a.f/a.tar.gz") ==  ('a.a.a.f/a', '.tar.gz'))
+    >>> bool(np.all(splitext_improved("a.a.a.f/a.tar.gz") ==  ('a.a.a.f/a', '.tar.gz')))
     True
     """
     import os
@@ -231,10 +231,10 @@ def rolling_window(a, window):
     --------
     >>> a = np.arange(5)
     >>> rw = rolling_window(a, 2)
-    >>> np.allclose(rw, [[0, 1], [1,2], [2, 3], [3, 4]])
+    >>> bool(np.allclose(rw, [[0, 1], [1,2], [2, 3], [3, 4]]))
     True
     >>> rw = rolling_window(a, 3)
-    >>> np.allclose(rw, [[0, 1, 2], [1, 2, 3], [2, 3, 4]])
+    >>> bool(np.allclose(rw, [[0, 1, 2], [1, 2, 3], [2, 3, 4]]))
     True
     """
     shape = a.shape[:-1] + (a.shape[-1] - window + 1, window)
@@ -248,13 +248,13 @@ def rolling_stat(stat_fun, a, window, pad='center', **kwargs):
     --------
     >>> a = np.arange(6)
     >>> r_sum = rolling_stat(np.sum, a, 3, pad='center', axis=-1)
-    >>> np.allclose(r_sum, [3.,  3.,  6.,  9., 12., 12.])
+    >>> bool(np.allclose(r_sum, [3.,  3.,  6.,  9., 12., 12.]))
     True
     >>> r_sum = rolling_stat(np.sum, a, 3, pad='left', axis=-1)
-    >>> np.allclose(r_sum, [3.,  3.,  3.,  6.,  9., 12.])
+    >>> bool(np.allclose(r_sum, [3.,  3.,  3.,  6.,  9., 12.]))
     True
     >>> r_sum = rolling_stat(np.sum, a, 3, pad='right', axis=-1)
-    >>> np.allclose(r_sum, [3.,  6.,  9., 12., 12., 12.])
+    >>> bool(np.allclose(r_sum, [3.,  6.,  9., 12., 12., 12.]))
     True
     >>> r_sum = rolling_stat(np.sum, a, 3, pad='incredible', axis=-1)
     Traceback (most recent call last):
@@ -294,7 +294,7 @@ def rolling_std(a, window, pad='center'):
 
     Examples
     >>> a = [0, 1, 1, 3]
-    >>> np.allclose(rolling_std(a, 2), [0.5, 0, 1, 1])
+    >>> bool(np.allclose(rolling_std(a, 2), [0.5, 0, 1, 1]))
     True
     """
     return rolling_stat(np.std, a, window, pad, axis=-1)
@@ -309,7 +309,7 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
     >>> x = np.arange(1000)
     >>> y = np.random.normal(x * 0.1, 0.01)
     >>> fun = spline_through_data(x, y, grace_intv=10.)
-    >>> np.std(y - fun(x)) < 0.01
+    >>> bool(np.std(y - fun(x)) < 0.01)
     True
     """
     lo_lim, hi_lim = x[0], x[-1]
@@ -343,17 +343,17 @@ def aggregate(table, max_number=1000):
     >>> newt = aggregate(table)
     >>> len(newt)
     2
-    >>> np.all(newt['a'] == table['a'])
+    >>> bool(np.all(newt['a'] == table['a']))
     True
-    >>> np.all(newt['b'] == table['b'])
+    >>> bool(np.all(newt['b'] == table['b']))
     True
     >>> newt = aggregate(table, max_number=1)
     >>> len(newt)
     1
-    >>> np.all(newt['a'] == 1.5)
+    >>> bool(np.all(newt['a'] == 1.5))
     True
     >>> newt = aggregate(table.to_pandas(), max_number=1)
-    >>> np.all(newt['b'] == 5.5)
+    >>> bool(np.all(newt['b'] == 5.5))
     True
     """
     N = len(table)
@@ -377,9 +377,9 @@ def aggregate_all_tables(table_list, max_number=1000):
     >>> newt = aggregate_all_tables([table])[0]
     >>> len(newt)
     2
-    >>> np.all(newt['a'] == table['a'])
+    >>> bool(np.all(newt['a'] == table['a']))
     True
-    >>> np.all(newt['b'] == table['b'])
+    >>> bool(np.all(newt['b'] == table['b']))
     True
     """
     return [aggregate(table) for table in table_list]
@@ -408,12 +408,12 @@ def cross_two_gtis(gti0, gti1):
     >>> gti1 = np.array([[1, 2]])
     >>> gti2 = np.array([[1, 2]])
     >>> newgti = cross_two_gtis(gti1, gti2)
-    >>> np.all(newgti == [[1, 2]])
+    >>> bool(np.all(newgti == [[1, 2]]))
     True
     >>> gti1 = np.array([[1, 4]])
     >>> gti2 = np.array([[1, 2], [2, 4]])
     >>> newgti = cross_two_gtis(gti1, gti2)
-    >>> np.all(newgti == [[1, 2], [2, 4]])
+    >>> bool(np.all(newgti == [[1, 2], [2, 4]]))
     True
     """
     import copy
@@ -455,7 +455,7 @@ def robust_poly_fit(x, y, order=3, p0=None):
     >>> x = np.arange(10)
     >>> y = x**2
     >>> fun = robust_poly_fit(x, y, order=2, p0=np.zeros(3))
-    >>> np.allclose(fun(x), y)
+    >>> bool(np.allclose(fun(x), y))
     True
     """
     from scipy.optimize import least_squares
@@ -487,10 +487,10 @@ def measure_overall_trend(x, y, ref_size=200):
     >>> val[0] is None
     True
     >>> val = measure_overall_trend(np.asarray([0, 1]), np.asarray([1, 1]))
-    >>> np.allclose(val, [0, 0, 1])
+    >>> bool(np.allclose(val, [0, 0, 1]))
     True
     >>> val = measure_overall_trend(np.arange(1000), np.ones(1000))
-    >>> np.allclose(val, [0, 0, 1])
+    >>> bool(np.allclose(val, [0, 0, 1]))
     True
     """
     x0 = x[0]
@@ -525,11 +525,11 @@ def get_rough_trend_fun(met, residuals):
     True
     >>> x, y = np.asarray([0, 1]), np.asarray([1, 1])
     >>> fun = get_rough_trend_fun(x, y)
-    >>> np.allclose(fun(x), y)
+    >>> bool(np.allclose(fun(x), y))
     True
     >>> x, y = np.arange(1000), np.ones(1000)
     >>> fun = get_rough_trend_fun(x, y)
-    >>> np.allclose(fun(x), y)
+    >>> bool(np.allclose(fun(x), y))
     True
     """
     x0, m, q = measure_overall_trend(met, residuals)
@@ -550,7 +550,7 @@ def merge_and_sort_arrays(array1, array2):
     --------
     >>> arr1 = np.array([0, 3., 1])
     >>> arr2 = np.array([2, 0])
-    >>> np.allclose(merge_and_sort_arrays(arr1, arr2), [0, 1, 2, 3])
+    >>> bool(np.allclose(merge_and_sort_arrays(arr1, arr2), [0, 1, 2, 3]))
     True
     """
     arr = np.concatenate((array1, array2))
@@ -567,7 +567,7 @@ def eliminate_array_from_array(array1, array2):
     --------
     >>> arr1 = np.array([0, 3., 1])
     >>> arr2 = np.array([4, 0])
-    >>> np.allclose(eliminate_array_from_array(arr1, arr2), [1, 3])
+    >>> bool(np.allclose(eliminate_array_from_array(arr1, arr2), [1, 3]))
     True
     """
     array1 = np.asarray(copy.deepcopy(array1))
@@ -685,11 +685,11 @@ def high_precision_keyword_read(hdr, keyword):
     Examples
     --------
     >>> hdr = dict(keywordS=1.25)
-    >>> high_precision_keyword_read(hdr, 'keywordS')
-    1.25
+    >>> bool(np.isclose(high_precision_keyword_read(hdr, 'keywordS'), 1.25))
+    True
     >>> hdr = dict(keywordI=1, keywordF=0.25)
-    >>> high_precision_keyword_read(hdr, 'keywordS')
-    1.25
+    >>> bool(np.isclose(high_precision_keyword_read(hdr, 'keywordS'), 1.25))
+    True
     >>> high_precision_keyword_read(hdr, 'bubabuab') is None
     True
     """

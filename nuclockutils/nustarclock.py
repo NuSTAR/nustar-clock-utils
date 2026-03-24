@@ -54,7 +54,7 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     >>> all_data = Table({'met': [0, 1, 2, 3, 4]})
     >>> all_data = flag_bad_points(all_data, db_file='dummy_bad_points.dat')
     INFO: ...
-    >>> np.all(all_data['flag'] == [False, False, False, True, False])
+    >>> bool(np.all(all_data['flag'] == [False, False, False, True, False]))
     True
     """
     if not os.path.exists(db_file):
@@ -354,9 +354,9 @@ def residual_roll_std(residuals, window=30):
     >>> residuals = np.zeros(5000)
     >>> residuals[:4000] = np.random.normal(0, 1, 4000)
     >>> roll_std = residual_roll_std(residuals, window=500)
-    >>> np.allclose(roll_std[:3500], 1., rtol=0.2)
+    >>> bool(np.allclose(roll_std[:3500], 1., rtol=0.2))
     True
-    >>> np.all(roll_std[4500:] == 0.)
+    >>> bool(np.all(roll_std[4500:] == 0.))
     True
     """
     r_std = rolling_std(residuals, window)
@@ -532,10 +532,10 @@ def no_jump_gtis(start_time, stop_time, clock_jump_times=None):
     Examples
     --------
     >>> gtis = no_jump_gtis(0, 3, [1, 1.1])
-    >>> np.allclose(gtis, [[0, 1], [1, 1.1], [1.1, 3]])
+    >>> bool(np.allclose(gtis, [[0, 1], [1, 1.1], [1.1, 3]]))
     True
     >>> gtis = no_jump_gtis(0, 3)
-    >>> np.allclose(gtis, [[0, 3]])
+    >>> bool(np.allclose(gtis, [[0, 3]]))
     True
     """
     if clock_jump_times is None:
@@ -558,11 +558,11 @@ def temperature_gtis(temperature_table, max_distance=600):
     --------
     >>> temperature_table = Table({'met': [0, 1, 2, 10, 11, 12]})
     >>> gti = temperature_gtis(temperature_table, 5)
-    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    >>> bool(np.allclose(gti, [[0, 2], [10, 12]]))
     True
     >>> temperature_table = Table({'met': [-10, 0, 1, 2, 10, 11, 12, 20]})
     >>> gti = temperature_gtis(temperature_table, 5)
-    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    >>> bool(np.allclose(gti, [[0, 2], [10, 12]]))
     True
     """
     temp_condition = np.concatenate(
