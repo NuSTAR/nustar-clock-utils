@@ -132,7 +132,7 @@ def get_exposure_per_bin(event_times, event_priors, parfile,
     # >>> prof = get_exposure_per_bin(event_times, event_priors, 1/10, nbin=10)
     # >>> prof[0]
     # 0
-    # >>> np.allclose(prof[1:], 1)
+    # >>> bool(np.allclose(prof[1:], 1))
     # True
     """
     log.info("Calculating exposure")
