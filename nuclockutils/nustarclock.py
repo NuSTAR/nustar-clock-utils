@@ -116,7 +116,7 @@ def calculate_stats(all_data):
     print("----------------------------- Stats -----------------------------------")
     print()
     print(f"Overall MAD: {scatter * 1e6:.0f} us")
-    print(f"Minimum scatter: ±{np.min(r_std) * 1e6:.0f} us")
+    print(f"Minimum scatter: ±{np.nanmin(r_std) * 1e6:.0f} us")
     print()
     print("-----------------------------------------------------------------------")
 
