@@ -16,7 +16,8 @@ authors = [
     { name = "Matteo Bachetti", email = "matteo.bachetti@inaf.it" },
 ]
 dependencies = [
-    "numpy",
+    "numpy < 2.0 ; python_version < '3.11'",
+    "numpy >= 2.0 ; python_version >= '3.11'",
     "scipy",
     "astropy",
     "matplotlib",
@@ -32,10 +33,12 @@ dependencies = [
     "h5py",
     "astroquery",
     "plotly",
-    "dash",
-    "stingray>=0.3",
+    "dash < 4.0.0 ; python_version < '3.11'",
+    "stingray (>=0.3, < 2.3.0) ; python_version < '3.11'",
+    "stingray>=0.3 ; python_version >= '3.11'",
     "pyyaml",
-    "hendrics",
+    "hendrics < 8.4 ; python_version < '3.11'",
+    "hendrics >= 8.4 ; python_version >= '3.11'",
 ]
 dynamic = ["version"]
 
