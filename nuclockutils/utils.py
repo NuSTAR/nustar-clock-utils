@@ -6,7 +6,7 @@ from astropy import log
 from astropy.table import Table
 from astroquery.heasarc import Heasarc
 from astropy.time import Time
-from scipy.interpolate import LSQUnivariateSpline
+from scipy.interpolate import make_lsq_spline
 from numba import vectorize
 
 try:
@@ -316,22 +316,32 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
 
     control_points = \
         np.linspace(lo_lim + 2 * grace_intv, hi_lim - 2 * grace_intv,
-                    int(x.size // downsample))
+                    int(max(x.size // downsample, k + 1)))
+
+    control_points = np.r_[(x[0],)*(k+1), control_points, (x[-1],)*(k+1)]
 
     if fixed_control_points is not None and len(fixed_control_points) > 0:
-        log.debug(f'Adding fixed control points: {fixed_control_points}')
-        control_points = np.sort(
-            np.concatenate((control_points, fixed_control_points)))
+        good_fcp = fixed_control_points[(fixed_control_points > lo_lim) & (fixed_control_points < hi_lim)]
+        if good_fcp.size > 0:
+            log.debug(f'Adding fixed control points: {good_fcp}')
+            control_points = np.sort(
+                np.concatenate((control_points, good_fcp)))
+        else:
+            log.debug(f'No fixed control points within the data range, ignoring.')
 
-    try:
-        detrend_fun = LSQUnivariateSpline(
-            x, y, t=control_points, k=k,
-            bbox=[lo_lim, hi_lim])
-    except ValueError as e:
-        log.error(f"Error in LSQUnivariateSpline: {e};\nDecreasing the number of control points"
-                  r" by 10% and trying again.")
-        return spline_through_data(x, y, k=k, grace_intv=grace_intv,
-                        downsample=downsample * 1.5, fixed_control_points=fixed_control_points)
+    flag_ctrl_pts  = np.ones(control_points.size, dtype=bool)
+    t_idxs = np.searchsorted(x, control_points)
+    for i, (id0, id1) in enumerate(zip(t_idxs[:-1], t_idxs[1:])):
+        if not id1 > id0 and np.any((x[id0:id1] > control_points[i]) & (x[id0:id1] < control_points[i + 1])):
+            # Schoenberg-Whitney condition is not satisfied, we need to remove this control point
+            log.info(f"No data between {control_points[i]} and {control_points[i + 1]}, removing control point.")
+            flag_ctrl_pts[i] = False
+
+    control_points = control_points[flag_ctrl_pts]
+
+    detrend_fun = make_lsq_spline(
+        x, y, t=control_points, k=k)
+
     return detrend_fun
 
 
