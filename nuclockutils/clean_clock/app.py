@@ -644,10 +644,10 @@ def main(args=None):
     print("Creating app")
     app = create_app()
     try:
-        app.run(debug=True)
+        app.run(debug=True, use_reloader=False)
     except Exception as e:
         # Compatibility with old versions
-        app.run_server(debug=True)
+        app.run_server(debug=True, use_reloader=False)
 
 
 

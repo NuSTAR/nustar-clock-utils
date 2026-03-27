@@ -507,7 +507,7 @@ def read_clock_offset_table(clockoffset_file=None, shift_non_malindi=False):
     clock_offset_table.remove_row(len(clock_offset_table) - 1)
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
-    log.info("Flagging bad points...")
+    log.info("Flagging bad points in clock offset table...")
     ALL_BAD_POINTS = get_bad_points_db()
 
     for b in ALL_BAD_POINTS:
