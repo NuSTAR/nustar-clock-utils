@@ -37,14 +37,15 @@ curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
 
 
-def get_bad_points_db(db_file='BAD_POINTS_DB.dat'):
-    if not os.path.exists(db_file):
+def get_bad_points_db(db_file=None):
+    if db_file is None or not os.path.exists(db_file):
+        log.warning(f"No local bad points database found. Using the default one.")
         db_file = os.path.join(datadir, 'BAD_POINTS_DB.dat')
-
+    log.info(f"Reading bad points from {db_file}")
     return np.genfromtxt(db_file, dtype=np.longdouble)
 
 
-def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
+def flag_bad_points(all_data, db_file=None):
     """
 
     Examples
@@ -57,13 +58,11 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     >>> bool(np.all(all_data['flag'] == [False, False, False, True, False]))
     True
     """
-    if not os.path.exists(db_file):
-        all_data['flag'] = np.zeros(len(all_data), dtype=bool)
-        return all_data
+
     log.info("Flagging bad points...")
 
     intv = [all_data['met'][0] - 0.5, all_data['met'][-1] + 0.5]
-    ALL_BAD_POINTS = np.genfromtxt(db_file)
+    ALL_BAD_POINTS = get_bad_points_db(db_file)
     ALL_BAD_POINTS.sort()
     ALL_BAD_POINTS = np.unique(ALL_BAD_POINTS)
     ALL_BAD_POINTS = ALL_BAD_POINTS[
@@ -121,11 +120,11 @@ def calculate_stats(all_data):
     print("-----------------------------------------------------------------------")
 
 
-def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=False):
+def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=False, db_file=None):
     clock_offset_table = load_clock_offset_table(clockfile,
                                                  shift_non_malindi=shift_non_malindi)
     clock_offset_table = flag_bad_points(
-        clock_offset_table, db_file='BAD_POINTS_DB.dat')
+        clock_offset_table, db_file=db_file)
     return clock_offset_table
 
 
