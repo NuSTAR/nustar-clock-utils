@@ -29,7 +29,8 @@ import copy
 import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews import opts
-# import matplotlib.pyplot as plt
+
+_BAD_POINTS_FILE = "BAD_POINTS_DB.dat"
 
 hv.extension('bokeh')
 
@@ -39,11 +40,11 @@ datadir = os.path.join(curdir, 'data')
 
 def get_bad_points_db(db_file=None):
     if db_file is None:
-        db_file = "BAD_POINTS_DB.dat"
+        db_file = _BAD_POINTS_FILE
 
     if not os.path.exists(db_file):
         log.warning(f"No local bad points database found. Using the default one.")
-        db_file = os.path.join(datadir, 'BAD_POINTS_DB.dat')
+        db_file = os.path.join(datadir, _BAD_POINTS_FILE)
 
     log.info(f"Reading bad points from {db_file}")
     return np.genfromtxt(db_file, dtype=np.longdouble)

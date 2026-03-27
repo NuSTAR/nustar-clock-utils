@@ -19,7 +19,7 @@ from nuclockutils.utils import get_obsid_list_from_heasarc, \
 
 from nuclockutils.nustarclock import load_temptable, load_freq_changes, \
     load_and_flag_clock_table, find_good_time_intervals, calculate_stats, \
-    eliminate_trends_in_residuals
+    eliminate_trends_in_residuals, _BAD_POINTS_FILE
 
 import dash
 from dash import dcc
@@ -524,12 +524,12 @@ def create_app():
             log.info("Removing point(s) from bad clock offset database")
             ALL_BAD_POINTS = eliminate_array_from_array(
                 ALL_BAD_POINTS, NEW_BAD_POINTS)
-            np.savetxt('BAD_POINTS_DB.dat', ALL_BAD_POINTS, fmt='%d')
+            np.savetxt(_BAD_POINTS_FILE, ALL_BAD_POINTS, fmt='%d')
         elif who_triggered == 'bad-data-button' and len(NEW_BAD_POINTS) > 0:
             log.info("Adding point(s) to bad clock offset database")
             ALL_BAD_POINTS = merge_and_sort_arrays(
                 ALL_BAD_POINTS, NEW_BAD_POINTS)
-            np.savetxt('BAD_POINTS_DB.dat', ALL_BAD_POINTS, fmt='%d')
+            np.savetxt(_BAD_POINTS_FILE, ALL_BAD_POINTS, fmt='%d')
         else:
             log.info("Refreshing plot")
             CURRENT_AXES = default_axes()
