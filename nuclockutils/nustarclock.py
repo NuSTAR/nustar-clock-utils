@@ -38,9 +38,13 @@ datadir = os.path.join(curdir, 'data')
 
 
 def get_bad_points_db(db_file=None):
-    if db_file is None or not os.path.exists(db_file):
+    if db_file is None:
+        db_file = "BAD_POINTS_DB.dat"
+
+    if not os.path.exists(db_file):
         log.warning(f"No local bad points database found. Using the default one.")
         db_file = os.path.join(datadir, 'BAD_POINTS_DB.dat')
+
     log.info(f"Reading bad points from {db_file}")
     return np.genfromtxt(db_file, dtype=np.longdouble)
 
