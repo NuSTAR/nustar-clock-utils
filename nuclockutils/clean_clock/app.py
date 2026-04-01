@@ -271,20 +271,23 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             continue
         if bti[0] > all_data['met'][-1]:
             continue
-        shapes.append(dict(type="rect",
+        shapes.append(
+            dict(
+                type="rect",
                 # x-reference is assigned to the x-values
                 xref="x",
                 # y-reference is assigned to the plot paper [0,1]
                 yref="paper",
-                x0=max(bti[0], all_data['met'][0]),
+                x0=float(max(bti[0], all_data["met"][0])),
                 y0=0,
-                x1=min(bti[1], all_data['met'][-1]),
+                x1=float(min(bti[1], all_data["met"][-1])),
                 y1=1,
                 fillcolor="LightSalmon",
                 opacity=0.5,
                 layer="below",
                 line_width=0,
-            ))
+            )
+        )
 
     if axis_ranges is not None:
         if 'xaxis.range[0]' in axis_ranges:
@@ -552,37 +555,26 @@ def create_app():
 
     def create_temperature_timeseries(x, y, axis_type='linear'):
         return {
-            'data': [dict(
-                x=x,
-                y=y,
-                mode='lines'
-            )],
-            'layout': {
-                'height': 300,
-                'yaxis': {'title': 'TCXO Temperature',
-                    'type': 'linear' if axis_type == 'Linear' else 'log'},
-                'xaxis': {'title': 'met', 'showgrid': False,
-                'margin':{'t': 20}}
-
-            }
+            "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
+            "layout": {
+                "height": 300,
+                "yaxis": {
+                    "title": "TCXO Temperature",
+                    "type": "linear" if axis_type == "Linear" else "log",
+                },
+                "xaxis": {"title": "met", "showgrid": False, "margin": {"t": 20}},
+            },
         }
 
 
     def create_temperature_gradient_timeseries(x, y, axis_type='linear'):
         return {
-            'data': [dict(
-                x=x,
-                y=y,
-                mode='lines'
-            )],
-            'layout': {
-                'height': 300,
-                'yaxis': {'title': 'TCXO Temp Gradient',
-                    'type': 'linear'},
-                'xaxis': {'title': 'met', 'showgrid': False,
-                'margin':{'t': 20}}
-
-            }
+            "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
+            "layout": {
+                "height": 300,
+                "yaxis": {"title": "TCXO Temp Gradient", "type": "linear"},
+                "xaxis": {"title": "met", "showgrid": False, "margin": {"t": 20}},
+            },
         }
 
 
@@ -644,10 +636,10 @@ def main(args=None):
     print("Creating app")
     app = create_app()
     try:
-        app.run(debug=True, use_reloader=False)
+        app.run()
     except Exception as e:
         # Compatibility with old versions
-        app.run_server(debug=True, use_reloader=False)
+        app.run_server()
 
 
 
