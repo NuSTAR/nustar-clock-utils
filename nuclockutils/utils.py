@@ -336,6 +336,11 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
             flag_ctrl_pts[i] = False
 
     control_points = control_points[flag_ctrl_pts]
+    # Stabilize the spline by adding two extra control points at the beginning and end,
+    # with a large grace interval and zero value. This is to prevent the spline from
+    # diverging at the edges.
+    x = np.concatenate(([x[0] - 1000000], x, [x[-1] + 1000000]))
+    y = np.concatenate(([0], y, [0]))
 
     control_points = np.r_[(x[0]- 1,)*(k+1), control_points, (x[-1] + 1,)*(k+1)]
 

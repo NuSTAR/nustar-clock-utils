@@ -540,7 +540,7 @@ def read_clock_offset_table(clockoffset_file=None, shift_non_malindi=False):
         all_but_malindi = clock_offset_table['station'] != 'MLD'
         clock_offset_table['offset'][all_but_malindi] -= 0.0005
     clock_offset_table['mjd'] = sec_to_mjd(clock_offset_table['met'])
-    clock_offset_table.remove_row(len(clock_offset_table) - 1)
+    # clock_offset_table.remove_row(len(clock_offset_table) - 1)
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
     log.info("Flagging bad points in clock offset table...")
@@ -1691,7 +1691,7 @@ def temperature_correction_table(met_start, met_stop,
             read_freq_changes_table(freqchange_file=freqchange_file)
         allfreqtimes = np.array(freq_changes_table['met'])
         allfreqtimes = \
-            np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
+            np.concatenate([allfreqtimes, [temptable['met'][-1]]])
         met_intervals = list(
             zip(allfreqtimes[:-1], allfreqtimes[1:]))
         divisors = freq_changes_table['divisor']
