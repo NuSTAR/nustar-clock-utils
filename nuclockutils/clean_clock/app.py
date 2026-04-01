@@ -608,6 +608,7 @@ def main(args=None):
     global FREQFILE
     global MODELVERSION
     import argparse
+    import logging
     description = ('Clean clock offset measurements with an handy web '
                    'interface.')
     parser = argparse.ArgumentParser(description=description)
@@ -623,6 +624,8 @@ def main(args=None):
                              "file in the auxil/directory "
                              "or the tp_tcxo*.csv file)")
     parser.add_argument("--temperature-model-version", default=None, help="Temperature model version")
+    parser.add_argument("--devel", action='store_true', help="Enable development mode")
+    parser.add_argument("--debug", action='store_true', help="Enable debug logging")
     args = parser.parse_args(args)
     if args.temperature_file is not None:
         TEMPFILE = args.temperature_file
@@ -632,14 +635,16 @@ def main(args=None):
         FREQFILE = args.frequency_file
     if args.temperature_model_version is not None:
         MODELVERSION = args.temperature_model_version
+    if args.debug:
+        log.setLevel(logging.DEBUG)
 
     print("Creating app")
     app = create_app()
     try:
-        app.run()
+        app.run(debug=args.devel, use_reloader=False)
     except Exception as e:
         # Compatibility with old versions
-        app.run_server()
+        app.run_server(debug=args.devel, use_reloader=False)
 
 
 
