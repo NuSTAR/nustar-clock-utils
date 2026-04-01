@@ -309,7 +309,7 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
     >>> x = np.arange(1000)
     >>> y = np.random.normal(x * 0.1, 0.01)
     >>> fun = spline_through_data(x, y, grace_intv=10.)
-    >>> bool(np.std(y - fun(x)) < 0.01)
+    >>> bool(np.std(y - fun(x)) < 0.02) # 2 sigma
     True
     """
     lo_lim, hi_lim = x[0], x[-1]
