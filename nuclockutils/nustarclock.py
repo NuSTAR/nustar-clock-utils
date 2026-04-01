@@ -64,10 +64,9 @@ def flag_bad_points(all_data, db_file=None):
     True
     """
 
-    log.info("Flagging bad points...")
-
     intv = [all_data['met'][0] - 0.5, all_data['met'][-1] + 0.5]
     ALL_BAD_POINTS = get_bad_points_db(db_file)
+    log.info("Sorting and filtering bad points...")
     ALL_BAD_POINTS.sort()
     ALL_BAD_POINTS = np.unique(ALL_BAD_POINTS)
     ALL_BAD_POINTS = ALL_BAD_POINTS[
@@ -75,6 +74,7 @@ def flag_bad_points(all_data, db_file=None):
 
     idxs = all_data['met'].searchsorted(ALL_BAD_POINTS)
 
+    log.info("Flagging bad points...")
     if 'flag' in all_data.colnames:
         mask = np.array(all_data['flag'], dtype=bool)
     else:
@@ -85,6 +85,7 @@ def flag_bad_points(all_data, db_file=None):
             continue
         mask[idx] = True
     all_data['flag'] = mask
+    log.info("Finished flagging bad points.")
     return all_data
 
 
@@ -107,6 +108,8 @@ def find_good_time_intervals(temperature_table,
     good = lengths > 43200
     if not np.all(good):
         log.info(f"Some GTIs are too short. cleaning up: {gtis[~good]}")
+    for g, is_good in zip(gtis, good):
+        log.info(f"GTI: {g[0]}-{g[1]} ({'OK' if is_good else 'too short'})")
 
     return gtis[good]
 
@@ -139,7 +142,15 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None,
     temperature_is_present = tempcorr_idx < temptable['met'].size
     tempcorr_idx = tempcorr_idx[temperature_is_present]
 
-    clock_offset_table = clock_offset_table[temperature_is_present]
+    n_before = temperature_is_present.size
+    n_after = np.count_nonzero(temperature_is_present)
+
+    if n_after < n_before:
+        log.info(f"spline_detrending: Filtering clock_offset_table:")
+        for eliminated in clock_offset_table[~temperature_is_present]['met']:
+            log.info(f"  MET {eliminated} (beyond temperature table range)")
+
+        clock_offset_table = clock_offset_table[temperature_is_present]
 
     clock_residuals = \
         np.array(clock_offset_table['offset'] -
@@ -163,8 +174,16 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None,
         do_not_flag = clock_mets > clock_mets.max() - one_month
         better_points[do_not_flag] = True
 
-        clock_offset_table = clock_offset_table[better_points]
-        clock_residuals = clock_residuals[better_points]
+        n_before = better_points.size
+        n_after = np.count_nonzero(better_points)
+
+        if n_after < n_before:
+            log.info(f"spline_detrending: Filtering clock_offset_table outliers")
+            for eliminated in clock_offset_table[~better_points]['met']:
+                log.info(f"  MET {eliminated}")
+
+            clock_offset_table = clock_offset_table[better_points]
+            clock_residuals = clock_residuals[better_points]
 
     detrend_fun = spline_through_data(
         clock_offset_table['met'], clock_residuals, downsample=10,
@@ -198,7 +217,15 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
     temperature_is_present = tempcorr_idx < temp_table['met'].size
     tempcorr_idx = tempcorr_idx[temperature_is_present]
 
-    clock_offset_table = clock_offset_table[temperature_is_present]
+    n_before = temperature_is_present.size
+    n_after = np.count_nonzero(temperature_is_present)
+
+    if n_after < n_before:
+        log.info(f"eliminate_trends_in_residuals: Filtering clock_offset_table")
+        for eliminated in clock_offset_table[~temperature_is_present]['met']:
+            log.info(f"  MET {eliminated} (beyond temperature table range)")
+
+        clock_offset_table = clock_offset_table[temperature_is_present]
 
     clock_residuals = \
         clock_offset_table['offset'] - temp_table['temp_corr'][tempcorr_idx]
@@ -214,8 +241,17 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
     good = (clock_residuals == clock_residuals) & ~clock_offset_table['flag'] & use_for_interpol
 
-    clock_offset_table = clock_offset_table[good]
-    clock_residuals = clock_residuals[good]
+    n_before = good.size
+    n_after = np.count_nonzero(good)
+
+    if n_after < n_before:
+        log.info("eliminate_trends_in_residuals: Filtering clock_offset_table to "
+                 "trustworthy points (Malindi or during Malindi outage)")
+        for eliminated in clock_offset_table[~good]['met']:
+            log.debug(f"  MET {eliminated} (bad point or not from Malindi)")
+
+        clock_offset_table = clock_offset_table[good]
+        clock_residuals = clock_residuals[good]
 
     for g in gtis:
         log.info(f"Treating data from METs {g[0]}--{g[1]}")
@@ -622,11 +658,20 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     freq_changes_table.sort('met')
 
     freq_changes_table['mjd'] = sec_to_mjd(freq_changes_table['met'])
-    freq_changes_table.remove_row(len(freq_changes_table) - 1)
+    # freq_changes_table.remove_row(len(freq_changes_table) - 1)
     freq_changes_table['flag'] = \
         np.abs(freq_changes_table['divisor'] - 2.400034e7) > 20
+
     if filter_bad:
-        freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
+        n_before = freq_changes_table['flag'].size
+        n_after = n_before - np.count_nonzero(freq_changes_table['flag'])
+
+        if n_after < n_before:
+            log.info(f"read_freq_changes_table: Filtering freq_changes_table")
+            for eliminated in freq_changes_table['met'][freq_changes_table['flag']]:
+                log.debug(f"  MET {eliminated} (bad frequency change point)")
+
+            freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
 
     return freq_changes_table
 
@@ -783,7 +828,14 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     else:
         good = np.diff(temptable['met']) > 0
         good = np.concatenate((good, [True]))
-        temptable = temptable[good]
+
+        n_before = good.size
+        n_after = np.count_nonzero(good)
+        if n_after < n_before:
+            log.info(f"read_temptable: Filtering temptable for bad time points")
+            for eliminated in temptable['met'][~good]:
+                log.debug(f"  MET {eliminated} (non increasing time)")
+            temptable = temptable[good]
     temptable.meta['gti'] = temp_gtis
 
     window = np.median(1000 / np.diff(temptable['met']))
@@ -949,15 +1001,34 @@ class ClockCorrection():
             filename = 'new_clock_file.fits'
         table_new = self.temperature_correction_data
         clock_offset_table = self.clock_offset_table
-        clock_offset_table = clock_offset_table[
-            clock_offset_table['met'] < table_new['met'][-1]]
+
+        good_clock = clock_offset_table['met'] < table_new['met'][-1]
+        n_before = good_clock.size
+        n_after = np.count_nonzero(good_clock)
+
+        if n_after < n_before:
+            log.info(f"write_clock_file: Filtering clock_offset_table:")
+            for eliminated in clock_offset_table[~good_clock]['met']:
+                log.info(f"  MET {eliminated} "
+                         f"(beyond table range)")
+
+            clock_offset_table = clock_offset_table[good_clock]
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
         temperature_is_present = tempcorr_idx < table_new['met'].size
         tempcorr_idx = tempcorr_idx[temperature_is_present]
 
-        clock_offset_table = clock_offset_table[temperature_is_present]
+        n_before = temperature_is_present.size
+        n_after = np.count_nonzero(temperature_is_present)
+
+        if n_after < n_before:
+            log.info(f"write_clock_file: Filtering clock_offset_table:")
+            for eliminated in clock_offset_table[~temperature_is_present]['met']:
+                log.info(f"  MET {eliminated} "
+                         f"(beyond temperature range)")
+
+            clock_offset_table = clock_offset_table[temperature_is_present]
 
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
@@ -1229,7 +1300,16 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
         plt.show()
 
     yint = - yint
-    clock_offset_table = clock_offset_table[good_mets]
+    n_before = good_mets.size
+    n_after = np.count_nonzero(good_mets)
+    if n_after < n_before:
+        log.info("plot_scatter: Filtering clock_offset_table:")
+        for eliminated in clock_offset_table[~good_mets]['met']:
+            log.info(f"  MET {eliminated} "
+                     f"(beyond interpolation range)")
+
+        clock_offset_table = clock_offset_table[good_mets]
+
     clock_offset_table['offset'] -= shift_times
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
@@ -1592,7 +1672,14 @@ def temperature_correction_table(met_start, met_stop,
                 "Interval not fully included in cached data. Recalculating.")
         else:
             good = (mets >= met_start - 86400) & (mets < met_stop + 86400)
-            return result_table[good]
+            n_before = good.size
+            n_after = np.count_nonzero(good)
+            if n_after < n_before:
+                log.info(f"temperature_correction_table: Filtering result_table:")
+                for eliminated in result_table[~good]['met']:
+                    log.info(f"  MET {eliminated} (beyond requested range)")
+                filtered_table = result_table[good]
+            return filtered_table
 
     if temptable is None or isinstance(temptable, six.string_types):
         mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)

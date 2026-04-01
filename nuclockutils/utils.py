@@ -318,7 +318,6 @@ def spline_through_data(x, y, k=2, grace_intv=1000., smoothing_factor=0.001,
         np.linspace(lo_lim + 2 * grace_intv, hi_lim - 2 * grace_intv,
                     int(max(x.size // downsample, k + 1)))
 
-
     if fixed_control_points is not None and len(fixed_control_points) > 0:
         good_fcp = fixed_control_points[(fixed_control_points > lo_lim) & (fixed_control_points < hi_lim)]
         if good_fcp.size > 0:
