@@ -17,7 +17,7 @@ from .fold_to_ephemeris import get_events_from_fits, \
     get_ephemeris_from_parfile
 from .compare_pulses import main as main_compare_pulses
 from nuclockutils.barycorr import main_barycorr as nubarycorr
-from nuclockutils.utils import high_precision_keyword_read
+from nuclockutils.utils import high_precision_keyword_read, SECONDS_PER_DAY
 
 
 def mkdir(folder):
@@ -40,7 +40,7 @@ def get_observing_mjd(fname):
         log.error(f"{fname} might be corrupted")
         return None
 
-    return np.array([tstart, tstop]) / 86400 + mjdref
+    return np.array([tstart, tstop]) / SECONDS_PER_DAY + mjdref
 
 
 def fold_file_to_ephemeris(fname, parfile, emin=None, emax=None,
@@ -61,7 +61,7 @@ def fold_file_to_ephemeris(fname, parfile, emin=None, emax=None,
         good = good & (events.energy < emax)
 
     times = events.time[good]
-    event_mjds = times / 86400 + events.mjdref
+    event_mjds = times / SECONDS_PER_DAY + events.mjdref
     phase = correction_fun(event_mjds)
 
     t = calculate_profile_from_phase(phase, nbin=nbin)

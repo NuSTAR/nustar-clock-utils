@@ -19,7 +19,7 @@ from nuclockutils.utils import get_obsid_list_from_heasarc, \
 
 from nuclockutils.nustarclock import load_temptable, load_freq_changes, \
     load_and_flag_clock_table, find_good_time_intervals, calculate_stats, \
-    eliminate_trends_in_residuals, _BAD_POINTS_FILE
+    eliminate_trends_in_residuals, _BAD_POINTS_FILE, FIXED_CONTROL_POINTS
 
 import dash
 from dash import dcc
@@ -80,7 +80,7 @@ def recalc(outfile='save_all.pickle'):
 
     table_new = eliminate_trends_in_residuals(
         table_new, clock_offset_table_corr, gtis,
-        fixed_control_points=np.arange(291e6, 295e6, 86400))
+        fixed_control_points=FIXED_CONTROL_POINTS)
 
     mets = np.array(table_new['met'])
     start = mets[0]

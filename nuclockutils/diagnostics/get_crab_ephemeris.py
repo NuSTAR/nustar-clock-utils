@@ -7,6 +7,7 @@ from astropy import log
 from astropy.table import Table
 
 from hendrics.io import high_precision_keyword_read
+from nuclockutils import SECONDS_PER_DAY
 
 from urllib.request import urlopen
 
@@ -85,7 +86,7 @@ def main(args=None):
             t0 = high_precision_keyword_read(header, 'TSTART')
             t1 = high_precision_keyword_read(header, 'TSTOP')
             mjdref = high_precision_keyword_read(header, 'MJDREF')
-            MJD = (t1 + t0) / 2 / 86400 + mjdref
+            MJD = (t1 + t0) / 2 / SECONDS_PER_DAY + mjdref
 
         get_crab_ephemeris(
             MJD, fname=os.path.splitext(os.path.basename(evfile))[0] + '.par')

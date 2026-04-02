@@ -22,3 +22,9 @@ except ImportError:
     version = '0.0.0'
 
 __version__ = version
+
+# Time constants (all in seconds unless noted)
+SECONDS_PER_DAY = 86400
+HALF_DAY_SECONDS = 43200  # Minimum GTI duration for valid processing
+SECONDS_PER_MONTH = SECONDS_PER_DAY * 30
+SECONDS_PER_YEAR = SECONDS_PER_DAY * 365.25

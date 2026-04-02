@@ -19,6 +19,7 @@ except AttributeError:
 except ImportError:
     pass
 
+from . import SECONDS_PER_DAY
 NUSTAR_MJDREF = np.longdouble("55197.00076601852")
 
 
@@ -60,11 +61,11 @@ def fix_byteorder(table):
 
 
 def sec_to_mjd(time, mjdref=NUSTAR_MJDREF, dtype=np.double):
-    return np.array(np.asarray(time) / 86400 + mjdref, dtype=dtype)
+    return np.array(np.asarray(time) / SECONDS_PER_DAY + mjdref, dtype=dtype)
 
 
 def mjd_to_sec(mjd, mjdref=NUSTAR_MJDREF, dtype=np.double):
-    return np.array((np.asarray(mjd) - mjdref) * 86400, dtype=dtype)
+    return np.array((np.asarray(mjd) - mjdref) * SECONDS_PER_DAY, dtype=dtype)
 
 
 def sec_to_ut(time, mjdref=NUSTAR_MJDREF, dtype=np.double):
@@ -73,7 +74,7 @@ def sec_to_ut(time, mjdref=NUSTAR_MJDREF, dtype=np.double):
 
 def ut_to_sec(isot, mjdref=NUSTAR_MJDREF, dtype=np.double):
     time = Time(isot)
-    return np.array((np.asarray(time.mjd) - mjdref) * 86400, dtype=dtype)
+    return np.array((np.asarray(time.mjd) - mjdref) * SECONDS_PER_DAY, dtype=dtype)
 
 
 def splitext_improved(path):
@@ -215,7 +216,7 @@ def get_obsid_list_from_heasarc(cache_file='heasarc.hdf5'):
     mjd_ends = Time(np.array(all_nustar_obs['end_time']), format='mjd')
 
     # all_nustar_obs = all_nustar_obs[all_nustar_obs["observation_mode"] == 'SCIENCE']
-    all_nustar_obs['met'] = np.array(all_nustar_obs['time'] - NUSTAR_MJDREF) * 86400
+    all_nustar_obs['met'] = np.array(all_nustar_obs['time'] - NUSTAR_MJDREF) * SECONDS_PER_DAY
     all_nustar_obs['date'] = mjds.fits
     all_nustar_obs['date-end'] = mjd_ends.fits
 
