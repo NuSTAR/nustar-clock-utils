@@ -319,6 +319,8 @@ def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=Fa
     """
     clock_offset_table = load_clock_offset_table(clockfile,
                                                  shift_non_malindi=shift_non_malindi)
+
+    # Column added/updated: 'flag' (bool) - True for known bad measurements based on db_file
     clock_offset_table = flag_bad_points(
         clock_offset_table, db_file=db_file)
     return clock_offset_table
@@ -627,6 +629,7 @@ def eliminate_trends_in_residuals(temptable, clock_offset_table,
 
     log.info("Final detrending...")
 
+    # Columns added to temptable: 'std', 'temp_corr_trend', 'temp_corr_detrend'
     table_new = spline_detrending(
         clock_offset_table, temptable,
         outlier_cuts=[-0.002, -0.001],
@@ -1235,8 +1238,10 @@ def load_temptable(temptable_name):
 
     if IS_CSV and os.path.exists(hdf5_name):
         IS_CSV = False
+        # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(hdf5_name, dt=10)
     else:
+        # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(temptable_name, dt=10)
 
     if IS_CSV:
@@ -1247,12 +1252,14 @@ def load_temptable(temptable_name):
 
 @lru_cache(maxsize=64)
 def load_freq_changes(freq_change_file):
+    # Returns table with: 'uxt', 'met', 'divisor', 'mjd', 'flag'
     log.info(f"Reading data from {freq_change_file}")
     return read_freq_changes_table(freq_change_file)
 
 
 @lru_cache(maxsize=64)
 def load_clock_offset_table(clock_offset_file, shift_non_malindi=False):
+    # Returns table with: 'met', 'offset', 'station', 'mjd', 'flag'
     return read_clock_offset_table(clock_offset_file,
                                    shift_non_malindi=shift_non_malindi)
 
@@ -1319,6 +1326,7 @@ class ClockCorrection():
         self.mjdstart = mjdstart
         self.mjdstop = mjdstop
 
+        # Sets self.temptable with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         self.read_temptable()
 
         if mjdstart is None:
@@ -1327,6 +1335,7 @@ class ClockCorrection():
             mjdstart = mjdstart - additional_days / 2
 
         self.clock_offset_file = clock_offset_file
+        # Returns table with: 'met', 'offset', 'station', 'mjd', 'flag'
         self.clock_offset_table = \
             read_clock_offset_table(self.clock_offset_file,
                                     shift_non_malindi=True)
@@ -1372,6 +1381,7 @@ class ClockCorrection():
         if adjust_absolute_timing:
             log.info("Adjusting temperature correction")
             try:
+                # Adds 'temp_corr_nodetrend'; replaces 'temp_corr' with detrended version
                 self.adjust_temperature_correction()
             except Exception:
                 logfile = 'adjust_temperature_error.log'
@@ -1386,6 +1396,7 @@ class ClockCorrection():
                 os.path.exists(cache_temptable_name):
             self.temptable = Table.read(cache_temptable_name, path='temptable')
         else:
+            # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
             self.temptable = \
                     read_temptable(temperature_file=self.temperature_file,
                                    mjdstart=self.mjdstart,
@@ -1411,6 +1422,7 @@ class ClockCorrection():
 
     def adjust_temperature_correction(self):
         """Adjust the temperature correction using measured clock offsets."""
+        # Adds 'temp_corr_detrend' column to returned table
         table_new = eliminate_trends_in_residuals(
             self.temperature_correction_data,
             load_clock_offset_table(
@@ -2347,10 +2359,12 @@ def temperature_correction_table(met_start, met_stop,
 
     if temptable is None or isinstance(temptable, six.string_types):
         mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
+        # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable = read_temptable(mjdstart=mjdstart,
                                    mjdstop=mjdstop,
                                    temperature_file=temptable, dt=10)
     if force_divisor is None:
+        # Returns table with: 'uxt', 'met', 'divisor', 'mjd', 'flag'
         freq_changes_table = \
             read_freq_changes_table(freqchange_file=freqchange_file)
         allfreqtimes = np.array(freq_changes_table['met'])
