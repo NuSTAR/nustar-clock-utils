@@ -1,5 +1,14 @@
 # Licensed under a 3-clause BSD style license - see LICENSE.rst
 
+# Time constants (all in seconds unless noted)
+SECONDS_PER_DAY = 86400
+HALF_DAY_SECONDS = 43200  # Minimum GTI duration for valid processing
+SECONDS_PER_MONTH = SECONDS_PER_DAY * 30
+SECONDS_PER_YEAR = SECONDS_PER_DAY * 365.25
+
+# Mission timeline constants (MET values)
+# MET when science operations began (end of commissioning phase)
+SCIENCE_START_MET = 77674700
 
 from .nustarclock import *
 from .utils import *
@@ -22,9 +31,3 @@ except ImportError:
     version = '0.0.0'
 
 __version__ = version
-
-# Time constants (all in seconds unless noted)
-SECONDS_PER_DAY = 86400
-HALF_DAY_SECONDS = 43200  # Minimum GTI duration for valid processing
-SECONDS_PER_MONTH = SECONDS_PER_DAY * 30
-SECONDS_PER_YEAR = SECONDS_PER_DAY * 365.25
