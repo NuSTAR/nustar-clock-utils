@@ -99,18 +99,13 @@ import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews import opts
 
+from . import SECONDS_PER_DAY, SECONDS_PER_MONTH, SECONDS_PER_YEAR, HALF_DAY_SECONDS
 # =============================================================================
 # Constants
 # =============================================================================
 
 # File paths
 _BAD_POINTS_FILE = "BAD_POINTS_DB.dat"
-
-# Time constants (all in seconds unless noted)
-SECONDS_PER_DAY = 86400
-HALF_DAY_SECONDS = 43200  # Minimum GTI duration for valid processing
-SECONDS_PER_MONTH = SECONDS_PER_DAY * 30
-SECONDS_PER_YEAR = SECONDS_PER_DAY * 365.25
 
 # Station timing offset: non-Malindi stations have a systematic 0.5 ms offset
 # due to different signal processing pipelines
@@ -281,7 +276,7 @@ def find_good_time_intervals(temperature_table, clock_jump_times=None):
     gtis = cross_two_gtis(temp_gtis, clock_gtis)
     lengths = gtis[:, 1] - gtis[:, 0]
     # ensure at least half a day duration for GTIs
-    good = lengths > 43200
+    good = lengths > HALF_DAY_SECONDS
     if not np.all(good):
         log.info(f"Some GTIs are too short. cleaning up: {gtis[~good]}")
     for g, is_good in zip(gtis, good):
@@ -1083,7 +1078,7 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
                      in_subfmt="date_hms").mjd
     log.info("Done.")
     temptable["mjd"] = np.array(times_mjd)
-    temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * 86400
+    temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * SECONDS_PER_DAY
     temptable.remove_column('Time')
     temptable.rename_column('tp_eps_ceu_txco_tmp', 'temperature')
     temptable["temperature"] = np.array(temptable["temperature"], dtype=float)
@@ -1353,8 +1348,8 @@ class ClockCorrection():
         self.mjdstart = mjdstart
         self.mjdstop = mjdstop
 
-        self.met_start = (self.mjdstart - NUSTAR_MJDREF) * 86400
-        self.met_stop = (self.mjdstop - NUSTAR_MJDREF) * 86400
+        self.met_start = (self.mjdstart - NUSTAR_MJDREF) * SECONDS_PER_DAY
+        self.met_stop = (self.mjdstop - NUSTAR_MJDREF) * SECONDS_PER_DAY
 
         if label is None or label == "":
             label = f"{self.met_start}-{self.met_stop}"
@@ -1532,7 +1527,7 @@ class ClockCorrection():
         if not highres:
             good_for_clockfile = np.zeros(allmets.size, dtype=bool)
             good_for_clockfile[::100] = True
-            twodays = 86400 * 2
+            twodays = SECONDS_PER_DAY * 2
             for jumptime in self.clock_jump_times:
                 idx0, idx1 = np.searchsorted(
                     allmets, [jumptime - twodays, jumptime + twodays])
@@ -2340,11 +2335,11 @@ def temperature_correction_table(met_start, met_stop,
         result_table = fix_byteorder(Table.read(hdf_dump_file))
         mets = np.array(result_table['met'])
         if (met_start > mets[10] or met_stop < mets[-20]) and (
-                met_stop - met_start < 3 * 365 * 86400):
+                met_stop - met_start < 3 * SECONDS_PER_YEAR):
             log.warning(
                 "Interval not fully included in cached data. Recalculating.")
         else:
-            good = (mets >= met_start - 86400) & (mets < met_stop + 86400)
+            good = (mets >= met_start - SECONDS_PER_DAY * 2) & (mets < met_stop + SECONDS_PER_DAY * 2)
 
             filtered_table = filter_and_log_table(
                 result_table,
@@ -2563,7 +2558,7 @@ def main_update_temptable(args=None):
     if args.outfile is not None and os.path.exists(args.outfile):
         log.info("Reading existing temperature table")
         existing_table = Table.read(args.outfile)
-        last_measurement = existing_table['mjd'][-1] + 0.001 / 86400
+        last_measurement = existing_table['mjd'][-1] + 0.001 / SECONDS_PER_DAY
 
     log.info("Reading new temperature values")
     new_table = read_csv_temptable(temperature_file=args.tempfile,
