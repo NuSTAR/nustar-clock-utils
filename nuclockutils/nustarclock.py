@@ -2392,6 +2392,9 @@ def temperature_correction_table(met_start, met_stop,
             continue
         if met_intv[0] > met_stop:
             break
+        if met_intv[0] > met_intv[1]:
+            log.warning(f"Invalid interval: {met_intv}")
+            continue
 
         start, stop = met_intv
 
