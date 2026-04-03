@@ -19,7 +19,7 @@ from nuclockutils.utils import get_obsid_list_from_heasarc, \
 
 from nuclockutils.nustarclock import load_temptable, load_freq_changes, \
     load_and_flag_clock_table, find_good_time_intervals, calculate_stats, \
-    eliminate_trends_in_residuals
+    eliminate_trends_in_residuals, _BAD_POINTS_FILE, FIXED_CONTROL_POINTS
 
 import dash
 from dash import dcc
@@ -64,7 +64,7 @@ def recalc(outfile='save_all.pickle'):
     met_start = clock_offset_table['met'][0]
     met_stop = clock_offset_table['met'][-1] + 30
     clock_jump_times = \
-        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772,
+        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772, 305080000,
                   392200784, 394825882, 395304135, 407914525, 408299422])
     clock_jump_times += 30 #  Sum 30 seconds to avoid to exclude these points
                            #  from previous interval
@@ -80,7 +80,7 @@ def recalc(outfile='save_all.pickle'):
 
     table_new = eliminate_trends_in_residuals(
         table_new, clock_offset_table_corr, gtis,
-        fixed_control_points=np.arange(291e6, 295e6, 86400))
+        fixed_control_points=FIXED_CONTROL_POINTS)
 
     mets = np.array(table_new['met'])
     start = mets[0]
@@ -100,6 +100,7 @@ def recalc(outfile='save_all.pickle'):
         np.array(
             clock_offset_table['offset'] - table_new['temp_corr'][tempcorr_idx]
         )
+
     clock_residuals_detrend = np.array(
         clock_offset_table['offset'] - table_new['temp_corr_detrend'][tempcorr_idx])
 
@@ -270,20 +271,23 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             continue
         if bti[0] > all_data['met'][-1]:
             continue
-        shapes.append(dict(type="rect",
+        shapes.append(
+            dict(
+                type="rect",
                 # x-reference is assigned to the x-values
                 xref="x",
                 # y-reference is assigned to the plot paper [0,1]
                 yref="paper",
-                x0=max(bti[0], all_data['met'][0]),
+                x0=float(max(bti[0], all_data["met"][0])),
                 y0=0,
-                x1=min(bti[1], all_data['met'][-1]),
+                x1=float(min(bti[1], all_data["met"][-1])),
                 y1=1,
                 fillcolor="LightSalmon",
                 opacity=0.5,
                 layer="below",
                 line_width=0,
-            ))
+            )
+        )
 
     if axis_ranges is not None:
         if 'xaxis.range[0]' in axis_ranges:
@@ -523,12 +527,12 @@ def create_app():
             log.info("Removing point(s) from bad clock offset database")
             ALL_BAD_POINTS = eliminate_array_from_array(
                 ALL_BAD_POINTS, NEW_BAD_POINTS)
-            np.savetxt('BAD_POINTS_DB.dat', ALL_BAD_POINTS, fmt='%d')
+            np.savetxt(_BAD_POINTS_FILE, ALL_BAD_POINTS, fmt='%d')
         elif who_triggered == 'bad-data-button' and len(NEW_BAD_POINTS) > 0:
             log.info("Adding point(s) to bad clock offset database")
             ALL_BAD_POINTS = merge_and_sort_arrays(
                 ALL_BAD_POINTS, NEW_BAD_POINTS)
-            np.savetxt('BAD_POINTS_DB.dat', ALL_BAD_POINTS, fmt='%d')
+            np.savetxt(_BAD_POINTS_FILE, ALL_BAD_POINTS, fmt='%d')
         else:
             log.info("Refreshing plot")
             CURRENT_AXES = default_axes()
@@ -551,37 +555,26 @@ def create_app():
 
     def create_temperature_timeseries(x, y, axis_type='linear'):
         return {
-            'data': [dict(
-                x=x,
-                y=y,
-                mode='lines'
-            )],
-            'layout': {
-                'height': 300,
-                'yaxis': {'title': 'TCXO Temperature',
-                    'type': 'linear' if axis_type == 'Linear' else 'log'},
-                'xaxis': {'title': 'met', 'showgrid': False,
-                'margin':{'t': 20}}
-
-            }
+            "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
+            "layout": {
+                "height": 300,
+                "yaxis": {
+                    "title": "TCXO Temperature",
+                    "type": "linear" if axis_type == "Linear" else "log",
+                },
+                "xaxis": {"title": "met", "showgrid": False, "margin": {"t": 20}},
+            },
         }
 
 
     def create_temperature_gradient_timeseries(x, y, axis_type='linear'):
         return {
-            'data': [dict(
-                x=x,
-                y=y,
-                mode='lines'
-            )],
-            'layout': {
-                'height': 300,
-                'yaxis': {'title': 'TCXO Temp Gradient',
-                    'type': 'linear'},
-                'xaxis': {'title': 'met', 'showgrid': False,
-                'margin':{'t': 20}}
-
-            }
+            "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
+            "layout": {
+                "height": 300,
+                "yaxis": {"title": "TCXO Temp Gradient", "type": "linear"},
+                "xaxis": {"title": "met", "showgrid": False, "margin": {"t": 20}},
+            },
         }
 
 
@@ -615,6 +608,7 @@ def main(args=None):
     global FREQFILE
     global MODELVERSION
     import argparse
+    import logging
     description = ('Clean clock offset measurements with an handy web '
                    'interface.')
     parser = argparse.ArgumentParser(description=description)
@@ -630,6 +624,8 @@ def main(args=None):
                              "file in the auxil/directory "
                              "or the tp_tcxo*.csv file)")
     parser.add_argument("--temperature-model-version", default=None, help="Temperature model version")
+    parser.add_argument("--devel", action='store_true', help="Enable development mode")
+    parser.add_argument("--debug", action='store_true', help="Enable debug logging")
     args = parser.parse_args(args)
     if args.temperature_file is not None:
         TEMPFILE = args.temperature_file
@@ -639,14 +635,16 @@ def main(args=None):
         FREQFILE = args.frequency_file
     if args.temperature_model_version is not None:
         MODELVERSION = args.temperature_model_version
+    if args.debug:
+        log.setLevel(logging.DEBUG)
 
     print("Creating app")
     app = create_app()
     try:
-        app.run(debug=True)
+        app.run(debug=args.devel, use_reloader=False)
     except Exception as e:
         # Compatibility with old versions
-        app.run_server(debug=True)
+        app.run_server(debug=args.devel, use_reloader=False)
 
 
 
