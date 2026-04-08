@@ -418,8 +418,8 @@ def create_app():
         html.Div(
             className="three columns div-for-charts bg-grey",
             children=[
-            dcc.Graph(id='temperature-time-series'),
-            dcc.Graph(id='temperature-gradient-time-series'),
+            dcc.Graph(mathjax=True, id='temperature-time-series'),
+            dcc.Graph(mathjax=True, id='temperature-gradient-time-series'),
             ]
         ),
         html.Div(id='dummy', style={'display': 'none'}),
@@ -577,13 +577,13 @@ def create_app():
         import plotly.graph_objects as go
         fig = go.Figure()
         fig.add_trace(go.Scattergl(x=np.asarray(x, dtype=float),
-                                   y=np.asarray(y, dtype=float), mode="lines"))
+                                   y=np.asarray(y, dtype=float) * 1e3, mode="lines"))
         fig.update_layout(
             height=300,
             margin=dict(t=20, b=50, l=60, r=20),
         )
         fig.update_xaxes(title_text="MET (s)", showgrid=False)
-        fig.update_yaxes(title_text="TCXO Temp Gradient (°C/s)", type="linear")
+        fig.update_yaxes(title_text=r"TCXO Temp Gradient (1e-3 °C/s)", type="linear")
         return fig
 
 
