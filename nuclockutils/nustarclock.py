@@ -1080,6 +1080,7 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
     temptable["mjd"] = np.array(times_mjd)
     temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * SECONDS_PER_DAY
     temptable.remove_column('Time')
+    temptable.sort("met")
     temptable.rename_column('tp_eps_ceu_txco_tmp', 'temperature')
     temptable["temperature"] = np.array(temptable["temperature"], dtype=float)
     if os.path.exists('tmp.csv'):
@@ -1248,7 +1249,6 @@ def load_temptable(temptable_name):
         # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(temptable_name, dt=10)
 
-    temptable_raw.sort("met")
     if IS_CSV:
         log.info(f"Saving temperature data to {hdf5_name}")
         temptable_raw.write(hdf5_name, overwrite=True)
