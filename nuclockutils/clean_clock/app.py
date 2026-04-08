@@ -519,6 +519,7 @@ def create_app():
 
         if who_triggered == 'recalculate-button':
             log.info("Recalculating all")
+
             stored_analysis.cache_clear()
             # cache.delete_memoized(stored_analysis, 'save_all.pickle')
             if os.path.exists('save_all.pickle'):

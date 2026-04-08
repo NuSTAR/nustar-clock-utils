@@ -1235,7 +1235,12 @@ def load_temptable(temptable_name):
     IS_CSV = temptable_name.endswith('.csv')
     hdf5_name = temptable_name.replace('.csv', '.hdf5')
 
-    if IS_CSV and os.path.exists(hdf5_name):
+    h5_exists = os.path.exists(hdf5_name)
+    h5_newer = h5_exists and os.path.getmtime(hdf5_name) > os.path.getmtime(temptable_name)
+    if h5_exists and not h5_newer:
+        log.info(f"HDF5 file {hdf5_name} is older than CSV file {temptable_name}. "
+                 "Re-reading from CSV and overwriting HDF5.")
+    if IS_CSV and h5_newer:
         IS_CSV = False
         # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(hdf5_name, dt=10)
@@ -1243,6 +1248,7 @@ def load_temptable(temptable_name):
         # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(temptable_name, dt=10)
 
+    temptable_raw.sort("met")
     if IS_CSV:
         log.info(f"Saving temperature data to {hdf5_name}")
         temptable_raw.write(hdf5_name, overwrite=True)
