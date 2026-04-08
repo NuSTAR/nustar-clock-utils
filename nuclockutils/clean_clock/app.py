@@ -563,11 +563,12 @@ def create_app():
             "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
             "layout": {
                 "height": 300,
+                "margin": {"t": 20, "b": 40, "l": 50, "r": 20},
                 "yaxis": {
                     "title": "TCXO Temperature",
                     "type": "linear" if axis_type == "Linear" else "log",
                 },
-                "xaxis": {"title": "met", "showgrid": False, "margin": {"t": 20}},
+                "xaxis": {"title": "met", "showgrid": False},
             },
         }
 
@@ -577,8 +578,9 @@ def create_app():
             "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
             "layout": {
                 "height": 300,
+                "margin": {"t": 20, "b": 40, "l": 50, "r": 20},
                 "yaxis": {"title": "TCXO Temp Gradient", "type": "linear"},
-                "xaxis": {"title": "met", "showgrid": False, "margin": {"t": 20}},
+                "xaxis": {"title": "met", "showgrid": False},
             },
         }
 
