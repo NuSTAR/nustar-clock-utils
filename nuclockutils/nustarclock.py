@@ -1237,7 +1237,7 @@ def load_temptable(temptable_name):
 
     h5_exists = os.path.exists(hdf5_name)
     h5_newer = h5_exists and os.path.getmtime(hdf5_name) > os.path.getmtime(temptable_name)
-    if h5_exists and not h5_newer:
+    if IS_CSV and h5_exists and not h5_newer:
         log.info(f"HDF5 file {hdf5_name} is older than CSV file {temptable_name}. "
                  "Re-reading from CSV and overwriting HDF5.")
     if IS_CSV and h5_newer:
