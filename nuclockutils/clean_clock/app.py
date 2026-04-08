@@ -520,10 +520,14 @@ def create_app():
         if who_triggered == 'recalculate-button':
             log.info("Recalculating all")
 
+            for file in ['save_all.pickle', 'dump.hdf5', 'all_data_res.pkl', 'rolling_data.pkl']:
+
+                if os.path.exists(file):
+                    log.info(f"Removing file {file}")
+                    os.unlink(file)
+
             stored_analysis.cache_clear()
-            # cache.delete_memoized(stored_analysis, 'save_all.pickle')
-            if os.path.exists('save_all.pickle'):
-                os.unlink('save_all.pickle')
+
         elif who_triggered == 'actually-good-data-button' and len(NEW_BAD_POINTS) > 0:
             log.info("Removing point(s) from bad clock offset database")
             ALL_BAD_POINTS = eliminate_array_from_array(
