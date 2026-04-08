@@ -220,7 +220,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
         'text': text[bad],
         'mode': 'markers',
         'name': f'Bad clock offset measurements',
-        'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 3}
+        'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 5}
     }), 1, 1)
 
     all_data_bad = all_data[bad]
@@ -233,7 +233,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             'text': text[bad],
             'mode': 'markers',
             'showlegend': False,
-            'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 3}
+            'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 5}
          }), row, 1)
 
     for station, color in zip(['MLD', 'SNG', 'UHI'], ['blue', 'red', 'orange']):
@@ -245,7 +245,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             'hovertemplate': hovertemplate,
             'text': text[good],
             'mode': 'markers',
-            'marker': {'color': color, 'size': 3},
+            'marker': {'color': color, 'size': 5},
             'name': f'Clock offset - {station}'
         }), 1, 1)
         for ydata, row in zip(['residual', 'residual_detrend'], [2, 3]):
@@ -256,7 +256,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
                 'text': text[good],
                 'showlegend': False,
                 'mode': 'markers',
-                'marker': {'color': color, 'size': 3}
+                'marker': {'color': color, 'size': 5}
             }), row, 1)
 
     # bad_intervals = [[0, 77.767e6]]
