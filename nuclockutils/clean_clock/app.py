@@ -559,30 +559,32 @@ def create_app():
 
 
     def create_temperature_timeseries(x, y, axis_type='linear'):
-        return {
-            "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
-            "layout": {
-                "height": 300,
-                "margin": {"t": 20, "b": 40, "l": 50, "r": 20},
-                "yaxis": {
-                    "title": "TCXO Temperature",
-                    "type": "linear" if axis_type == "Linear" else "log",
-                },
-                "xaxis": {"title": "met", "showgrid": False},
-            },
-        }
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        fig.add_trace(go.Scattergl(x=np.asarray(x, dtype=float),
+                                   y=np.asarray(y, dtype=float), mode="lines"))
+        fig.update_layout(
+            height=300,
+            margin=dict(t=20, b=50, l=60, r=20),
+        )
+        fig.update_xaxes(title_text="MET (s)", showgrid=False)
+        fig.update_yaxes(title_text="TCXO Temperature (°C)",
+                         type="linear" if axis_type == "linear" else "log")
+        return fig
 
 
     def create_temperature_gradient_timeseries(x, y, axis_type='linear'):
-        return {
-            "data": [dict(x=x.astype(float), y=y.astype(float), mode="lines")],
-            "layout": {
-                "height": 300,
-                "margin": {"t": 20, "b": 40, "l": 50, "r": 20},
-                "yaxis": {"title": "TCXO Temp Gradient", "type": "linear"},
-                "xaxis": {"title": "met", "showgrid": False},
-            },
-        }
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        fig.add_trace(go.Scattergl(x=np.asarray(x, dtype=float),
+                                   y=np.asarray(y, dtype=float), mode="lines"))
+        fig.update_layout(
+            height=300,
+            margin=dict(t=20, b=50, l=60, r=20),
+        )
+        fig.update_xaxes(title_text="MET (s)", showgrid=False)
+        fig.update_yaxes(title_text="TCXO Temp Gradient (°C/s)", type="linear")
+        return fig
 
 
     @app.callback(
