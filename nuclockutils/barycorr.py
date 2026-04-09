@@ -14,7 +14,7 @@ from astropy.coordinates import Angle
 import nuclockutils
 from .utils import filter_with_region, high_precision_keyword_read
 from .nustarclock import interpolate_clock_function
-
+from . import SECONDS_PER_DAY
 
 class OrbitalFunctions():
     lat_fun = None
@@ -29,7 +29,7 @@ def get_orbital_functions(orbfile):
     orbtable = Table.read(orbfile)
     mjdref = high_precision_keyword_read(orbtable.meta, 'MJDREF')
 
-    times = Time(np.array(orbtable['TIME'] / 86400 + mjdref), format='mjd')
+    times = Time(np.array(orbtable['TIME'] / SECONDS_PER_DAY + mjdref), format='mjd')
     if 'GEODETIC' in orbtable.colnames:
         geod = np.array(orbtable['GEODETIC'])
         lat, lon, alt = geod[:, 0] * u.deg, geod[:, 1] * u.deg, geod[:,
@@ -82,8 +82,8 @@ def get_barycentric_correction(orbfile, parfile, dt=5, ephem='DE421'):
         mjdref = high_precision_keyword_read(hdul[1].header, 'MJDREF')
 
     knots = no.X.get_knots()
-    mjds = np.arange(knots[1], knots[-2], dt / 86400)
-    mets = (mjds - mjdref) * 86400
+    mjds = np.arange(knots[1], knots[-2], dt / SECONDS_PER_DAY)
+    mets = (mjds - mjdref) * SECONDS_PER_DAY
 
     obs, scale = 'nustar', "tt"
     toalist = [None] * len(mjds)

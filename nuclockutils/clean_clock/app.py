@@ -19,7 +19,7 @@ from nuclockutils.utils import get_obsid_list_from_heasarc, \
 
 from nuclockutils.nustarclock import load_temptable, load_freq_changes, \
     load_and_flag_clock_table, find_good_time_intervals, calculate_stats, \
-    eliminate_trends_in_residuals
+    eliminate_trends_in_residuals, _BAD_POINTS_FILE, FIXED_CONTROL_POINTS
 
 import dash
 from dash import dcc
@@ -64,7 +64,7 @@ def recalc(outfile='save_all.pickle'):
     met_start = clock_offset_table['met'][0]
     met_stop = clock_offset_table['met'][-1] + 30
     clock_jump_times = \
-        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772,
+        np.array([77469000, 78708320, 79657575, 81043985, 82055671, 293346772, 305080000,
                   392200784, 394825882, 395304135, 407914525, 408299422])
     clock_jump_times += 30 #  Sum 30 seconds to avoid to exclude these points
                            #  from previous interval
@@ -80,7 +80,7 @@ def recalc(outfile='save_all.pickle'):
 
     table_new = eliminate_trends_in_residuals(
         table_new, clock_offset_table_corr, gtis,
-        fixed_control_points=np.arange(291e6, 295e6, 86400))
+        fixed_control_points=FIXED_CONTROL_POINTS)
 
     mets = np.array(table_new['met'])
     start = mets[0]
@@ -100,6 +100,7 @@ def recalc(outfile='save_all.pickle'):
         np.array(
             clock_offset_table['offset'] - table_new['temp_corr'][tempcorr_idx]
         )
+
     clock_residuals_detrend = np.array(
         clock_offset_table['offset'] - table_new['temp_corr_detrend'][tempcorr_idx])
 
@@ -219,7 +220,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
         'text': text[bad],
         'mode': 'markers',
         'name': f'Bad clock offset measurements',
-        'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 3}
+        'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 5}
     }), 1, 1)
 
     all_data_bad = all_data[bad]
@@ -232,7 +233,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             'text': text[bad],
             'mode': 'markers',
             'showlegend': False,
-            'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 3}
+            'marker': {'color': 'grey', 'symbol': "x-dot", 'size': 5}
          }), row, 1)
 
     for station, color in zip(['MLD', 'SNG', 'UHI'], ['blue', 'red', 'orange']):
@@ -244,7 +245,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             'hovertemplate': hovertemplate,
             'text': text[good],
             'mode': 'markers',
-            'marker': {'color': color, 'size': 3},
+            'marker': {'color': color, 'size': 5},
             'name': f'Clock offset - {station}'
         }), 1, 1)
         for ydata, row in zip(['residual', 'residual_detrend'], [2, 3]):
@@ -255,7 +256,7 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
                 'text': text[good],
                 'showlegend': False,
                 'mode': 'markers',
-                'marker': {'color': color, 'size': 3}
+                'marker': {'color': color, 'size': 5}
             }), row, 1)
 
     # bad_intervals = [[0, 77.767e6]]
@@ -270,20 +271,23 @@ def plot_dash(all_data, table_new, gti, all_nustar_obs,
             continue
         if bti[0] > all_data['met'][-1]:
             continue
-        shapes.append(dict(type="rect",
+        shapes.append(
+            dict(
+                type="rect",
                 # x-reference is assigned to the x-values
                 xref="x",
                 # y-reference is assigned to the plot paper [0,1]
                 yref="paper",
-                x0=max(bti[0], all_data['met'][0]),
+                x0=float(max(bti[0], all_data["met"][0])),
                 y0=0,
-                x1=min(bti[1], all_data['met'][-1]),
+                x1=float(min(bti[1], all_data["met"][-1])),
                 y1=1,
                 fillcolor="LightSalmon",
                 opacity=0.5,
                 layer="below",
                 line_width=0,
-            ))
+            )
+        )
 
     if axis_ranges is not None:
         if 'xaxis.range[0]' in axis_ranges:
@@ -414,8 +418,8 @@ def create_app():
         html.Div(
             className="three columns div-for-charts bg-grey",
             children=[
-            dcc.Graph(id='temperature-time-series'),
-            dcc.Graph(id='temperature-gradient-time-series'),
+            dcc.Graph(mathjax=True, id='temperature-time-series'),
+            dcc.Graph(mathjax=True, id='temperature-gradient-time-series'),
             ]
         ),
         html.Div(id='dummy', style={'display': 'none'}),
@@ -515,20 +519,25 @@ def create_app():
 
         if who_triggered == 'recalculate-button':
             log.info("Recalculating all")
+
+            for file in ['save_all.pickle', 'dump.hdf5', 'all_data_res.pkl', 'rolling_data.pkl']:
+
+                if os.path.exists(file):
+                    log.info(f"Removing file {file}")
+                    os.unlink(file)
+
             stored_analysis.cache_clear()
-            # cache.delete_memoized(stored_analysis, 'save_all.pickle')
-            if os.path.exists('save_all.pickle'):
-                os.unlink('save_all.pickle')
+
         elif who_triggered == 'actually-good-data-button' and len(NEW_BAD_POINTS) > 0:
             log.info("Removing point(s) from bad clock offset database")
             ALL_BAD_POINTS = eliminate_array_from_array(
                 ALL_BAD_POINTS, NEW_BAD_POINTS)
-            np.savetxt('BAD_POINTS_DB.dat', ALL_BAD_POINTS, fmt='%d')
+            np.savetxt(_BAD_POINTS_FILE, ALL_BAD_POINTS, fmt='%d')
         elif who_triggered == 'bad-data-button' and len(NEW_BAD_POINTS) > 0:
             log.info("Adding point(s) to bad clock offset database")
             ALL_BAD_POINTS = merge_and_sort_arrays(
                 ALL_BAD_POINTS, NEW_BAD_POINTS)
-            np.savetxt('BAD_POINTS_DB.dat', ALL_BAD_POINTS, fmt='%d')
+            np.savetxt(_BAD_POINTS_FILE, ALL_BAD_POINTS, fmt='%d')
         else:
             log.info("Refreshing plot")
             CURRENT_AXES = default_axes()
@@ -550,39 +559,32 @@ def create_app():
 
 
     def create_temperature_timeseries(x, y, axis_type='linear'):
-        return {
-            'data': [dict(
-                x=x,
-                y=y,
-                mode='lines'
-            )],
-            'layout': {
-                'height': 300,
-                'yaxis': {'title': 'TCXO Temperature',
-                    'type': 'linear' if axis_type == 'Linear' else 'log'},
-                'xaxis': {'title': 'met', 'showgrid': False,
-                'margin':{'t': 20}}
-
-            }
-        }
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        fig.add_trace(go.Scattergl(x=np.asarray(x, dtype=float),
+                                   y=np.asarray(y, dtype=float), mode="lines"))
+        fig.update_layout(
+            height=300,
+            margin=dict(t=20, b=50, l=60, r=20),
+        )
+        fig.update_xaxes(title_text="MET (s)", showgrid=False)
+        fig.update_yaxes(title_text="TCXO Temperature (°C)",
+                         type="linear" if axis_type == "linear" else "log")
+        return fig
 
 
     def create_temperature_gradient_timeseries(x, y, axis_type='linear'):
-        return {
-            'data': [dict(
-                x=x,
-                y=y,
-                mode='lines'
-            )],
-            'layout': {
-                'height': 300,
-                'yaxis': {'title': 'TCXO Temp Gradient',
-                    'type': 'linear'},
-                'xaxis': {'title': 'met', 'showgrid': False,
-                'margin':{'t': 20}}
-
-            }
-        }
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        fig.add_trace(go.Scattergl(x=np.asarray(x, dtype=float),
+                                   y=np.asarray(y, dtype=float) * 1e3, mode="lines"))
+        fig.update_layout(
+            height=300,
+            margin=dict(t=20, b=50, l=60, r=20),
+        )
+        fig.update_xaxes(title_text="MET (s)", showgrid=False)
+        fig.update_yaxes(title_text=r"TCXO Temp Gradient (1e-3 °C/s)", type="linear")
+        return fig
 
 
     @app.callback(
@@ -615,6 +617,7 @@ def main(args=None):
     global FREQFILE
     global MODELVERSION
     import argparse
+    import logging
     description = ('Clean clock offset measurements with an handy web '
                    'interface.')
     parser = argparse.ArgumentParser(description=description)
@@ -630,6 +633,8 @@ def main(args=None):
                              "file in the auxil/directory "
                              "or the tp_tcxo*.csv file)")
     parser.add_argument("--temperature-model-version", default=None, help="Temperature model version")
+    parser.add_argument("--devel", action='store_true', help="Enable development mode")
+    parser.add_argument("--debug", action='store_true', help="Enable debug logging")
     args = parser.parse_args(args)
     if args.temperature_file is not None:
         TEMPFILE = args.temperature_file
@@ -639,14 +644,16 @@ def main(args=None):
         FREQFILE = args.frequency_file
     if args.temperature_model_version is not None:
         MODELVERSION = args.temperature_model_version
+    if args.debug:
+        log.setLevel(logging.DEBUG)
 
     print("Creating app")
     app = create_app()
     try:
-        app.run(debug=True)
+        app.run(debug=args.devel, use_reloader=False)
     except Exception as e:
         # Compatibility with old versions
-        app.run_server(debug=True)
+        app.run_server(debug=args.devel, use_reloader=False)
 
 
 

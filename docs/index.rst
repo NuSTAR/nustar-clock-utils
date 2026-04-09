@@ -11,7 +11,6 @@ Installation
 
     $ git clone https://github.com/matteobachetti/nustar-clock-utils
     $ cd nustar-clock-utils
-    $ pip install -r requirements.txt
     $ pip install .
 
 Usage
