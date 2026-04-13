@@ -3,17 +3,17 @@ from astropy.time import Time
 import numpy as np
 from astropy.table import Table
 import matplotlib.pyplot as plt
-from nuclockutils.nustarclock import interpolate_clock_function
+from nuclockutils.nustarclock import interpolate_clock_function, SECONDS_PER_DAY
 
 
 def get_todays_met():
     t = Time.now()
-    met = (t.mjd - 55197.00076601852) * 86400
+    met = (t.mjd - 55197.00076601852) * SECONDS_PER_DAY
     return met
 
 def get_launch_met():
     t = Time('2012-06-12')
-    met = (t.mjd - 55197.00076601852) * 86400
+    met = (t.mjd - 55197.00076601852) * SECONDS_PER_DAY
     return met
 
 

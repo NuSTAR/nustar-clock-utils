@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from uncertainties import ufloat
 from astropy import log
 from statsmodels.robust import mad
+from nuclockutils.utils import SECONDS_PER_DAY
 
 from .fftfit import fftfit
 
@@ -33,7 +34,7 @@ def format_profile_and_get_phase(file, template=None):
     fddot = 0
     if 'F2' in table.meta:
         fddot = table.meta['F2']
-    delta_t = (mjd - pepoch) * 86400
+    delta_t = (mjd - pepoch) * SECONDS_PER_DAY
     f0 = freq + fdot * delta_t + 0.5 * fddot * delta_t ** 2
 
     period_ms = 1 / f0 * 1000

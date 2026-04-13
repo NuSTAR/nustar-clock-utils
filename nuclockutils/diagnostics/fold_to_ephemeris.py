@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from pint import models
 from stingray.pulse.pulsar import _load_and_prepare_TOAs, get_model
 from scipy.interpolate import PchipInterpolator
+from nuclockutils import SECONDS_PER_DAY
 
 
 
@@ -132,7 +133,7 @@ def get_exposure_per_bin(event_times, event_priors, parfile,
     # >>> prof = get_exposure_per_bin(event_times, event_priors, 1/10, nbin=10)
     # >>> prof[0]
     # 0
-    # >>> np.allclose(prof[1:], 1)
+    # >>> bool(np.allclose(prof[1:], 1))
     # True
     """
     log.info("Calculating exposure")
@@ -147,8 +148,8 @@ def get_exposure_per_bin(event_times, event_priors, parfile,
 
     sampling_time = 1 / m.F0.value / nbin / 7.1234514351515132414
     chunk_size = np.min((sampling_time * 50000000, 1000))
-    mjdstart = (event_times[0] - 10) / 86400 + mjdref
-    mjdstop = (event_times[-1] + 10) / 86400 + mjdref
+    mjdstart = (event_times[0] - 10) / SECONDS_PER_DAY + mjdref
+    mjdstop = (event_times[-1] + 10) / SECONDS_PER_DAY + mjdref
 
     phase_correction_fun = get_phase_from_ephemeris_file(mjdstart, mjdstop,
                                                          parfile)
@@ -163,7 +164,7 @@ def get_exposure_per_bin(event_times, event_priors, parfile,
 
         dead = idxs_live == idxs_dead
 
-        sample_times = sample_times / 86400 + mjdref
+        sample_times = sample_times / SECONDS_PER_DAY + mjdref
         # phases_all = _fast_phase_fddot(sample_times, freq, fdot, fddot)
         # phases_dead = _fast_phase_fddot(sample_times[dead], freq, fdot, fddot)
         phases_all = phase_correction_fun(sample_times)
@@ -272,7 +273,7 @@ def main(args=None):
     events = get_events_from_fits(evfile)
 
     MJDREF = events.mjdref
-    MJD = events.time.mean() / 86400 + MJDREF
+    MJD = events.time.mean() / SECONDS_PER_DAY + MJDREF
 
     good = np.ones(events.time.size, dtype=bool)
     if emin is not None:
@@ -280,7 +281,7 @@ def main(args=None):
     if emax is not None:
         good = good & (events.energy < emax)
 
-    events_time = events.time[good] / 86400 + MJDREF
+    events_time = events.time[good] / SECONDS_PER_DAY + MJDREF
     mjdstart = events_time[0] - 0.01
     mjdstop = events_time[-1] + 0.01
 

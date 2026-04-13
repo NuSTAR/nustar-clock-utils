@@ -1,9 +1,78 @@
+"""
+NuSTAR Clock Correction Module
+==============================
+
+This module provides tools for correcting the NuSTAR spacecraft clock drift
+using temperature-dependent models. The onboard TCXO (Temperature Compensated
+Crystal Oscillator) exhibits predictable drift correlated with temperature,
+which this module models and corrects.
+
+Data Flow Overview
+------------------
+1. **Temperature data** is read from housekeeping files (CSV, HDF5, or FITS)
+2. **Clock offset measurements** from ground station passes are loaded
+3. **Frequency divisor changes** (commanded clock adjustments) are loaded
+4. Temperature-dependent clock drift is modeled using `clock_ppm_model`
+5. Residuals between model and measurements are detrended with splines
+6. Final correction is written as a CALDB-compatible FITS clock file
+
+Primary Table Schemas
+---------------------
+**clock_offset_table** (from ground station measurements):
+    - ``uxt``: Unix timestamp of measurement
+    - ``met``: Mission Elapsed Time (seconds since MJDREF)
+    - ``offset``: Measured clock offset from ground truth (seconds)
+    - ``divisor``: Clock divisor value at measurement time
+    - ``station``: Ground station code (e.g. 'MLD'=Malindi, 'SNG'=Singapore, 'UHI'=Hawaii)
+    - ``mjd``: Modified Julian Date (computed)
+    - ``flag``: Boolean, True if measurement is flagged as bad
+
+**temptable** (temperature measurements):
+    - ``met``: Mission Elapsed Time (seconds)
+    - ``mjd``: Modified Julian Date
+    - ``temperature``: Raw TCXO temperature (Celsius)
+    - ``temperature_smooth``: Savitzky-Golay smoothed temperature
+    - ``temperature_smooth_gradient``: Time derivative of smoothed temperature
+
+**temptable with corrections** (after processing):
+    - All columns above, plus:
+    - ``temp_corr``: Temperature-model clock correction (seconds)
+    - ``temp_corr_raw``: Original temp_corr before trend removal
+    - ``temp_corr_trend``: Spline trend fitted to residuals
+    - ``temp_corr_detrend``: temp_corr + temp_corr_trend (final correction)
+    - ``std``: Rolling standard deviation of residuals
+
+**freq_changes_table** (commanded frequency divisor changes):
+    - ``uxt``: Unix timestamp of command
+    - ``met``: Mission Elapsed Time
+    - ``divisor``: New clock divisor value (~24000336)
+    - ``mjd``: Modified Julian Date (computed)
+    - ``flag``: Boolean, True if divisor value is anomalous
+
+Key Classes
+-----------
+- :class:`ClockCorrection`: Main class for computing clock corrections
+- :class:`NuSTARCorr`: Applies corrections to event files
+
+Key Functions
+-------------
+- :func:`temperature_correction_table`: Builds the temperature-based correction
+- :func:`eliminate_trends_in_residuals`: Removes systematic trends from residuals
+- :func:`clock_ppm_model`: The physical model for clock drift vs temperature
+
+Notes
+-----
+- MET (Mission Elapsed Time) is in seconds since MJDREF = 55197.00076601852
+- The "Malindi problem" (2012-12-20 to 2013-02-08) requires special handling
+- Clock jumps occur when the frequency divisor is commanded to change
+"""
+
 import glob
 import os
 import shutil
 from functools import lru_cache
 import traceback
-
+import warnings
 import numpy as np
 from astropy.table import Table, vstack
 import pandas as pd
@@ -29,7 +98,40 @@ import copy
 import holoviews as hv
 from holoviews.operation.datashader import datashade
 from holoviews import opts
-# import matplotlib.pyplot as plt
+
+from . import SECONDS_PER_DAY, SECONDS_PER_MONTH, SECONDS_PER_YEAR, HALF_DAY_SECONDS
+# =============================================================================
+# Constants
+# =============================================================================
+
+# File paths
+_BAD_POINTS_FILE = "BAD_POINTS_DB.dat"
+
+# Station timing offset: non-Malindi stations have a systematic 0.5 ms offset
+# due to different signal processing pipelines
+NON_MALINDI_OFFSET_SECONDS = 0.0005
+
+# Clock hardware constants
+NOMINAL_CLOCK_DIVISOR = 24000336  # Typical commanded divisor value
+CLOCK_DIVISOR_TOLERANCE = 20  # Divisor values outside ±20 of 2.400034e7 are flagged
+
+# Known problematic time intervals (MET values)
+# Malindi ground station outage: 2012-12-20 to 2013-02-08
+MALINDI_OUTAGE_INTERVALS = [
+    (93681591, 98051312),   # 2012/12/20 - 2013/02/08 Malindi outage
+    (357295300, 357972500),  # 2021/04/28 - 2021/05/06 Malindi clock issues
+]
+
+# Known clock jump times (MET) - when frequency divisor was commanded to change
+KNOWN_CLOCK_JUMP_TIMES = np.array([
+    78708320, 79657575, 81043985, 82055671, 293346772,
+    392200784, 394825882, 395304135, 407914525, 408299422
+])
+
+# Reference epoch for absorption-desorption model
+ABS_DES_REFERENCE_MET = 77509250
+
+FIXED_CONTROL_POINTS = np.arange(291e6, 295e6, SECONDS_PER_DAY)
 
 hv.extension('bokeh')
 
@@ -37,15 +139,71 @@ curdir = os.path.abspath(os.path.dirname(__file__))
 datadir = os.path.join(curdir, 'data')
 
 
-def get_bad_points_db(db_file='BAD_POINTS_DB.dat'):
-    if not os.path.exists(db_file):
-        db_file = os.path.join(datadir, 'BAD_POINTS_DB.dat')
+def filter_and_log_table(
+        table,
+        mask,
+        intro_text="Filtering table",
+        comment_to_point=None,
+        point_log_func=log.info
+        ):
+    n_before = mask.size
+    n_after = np.count_nonzero(mask)
+    comment_to_point = f" ({comment_to_point})" if comment_to_point else ""
 
+    if n_after < n_before:
+        log.info(f"{intro_text} ({n_after} -> {n_before})")
+        for eliminated in table[~mask]['met']:
+            point_log_func(f"  MET {eliminated}{comment_to_point}")
+        return table[mask]
+    return table
+
+def get_bad_points_db(db_file=None):
+    """Load the database of known bad clock offset measurement times.
+
+    Bad points are MET values where clock offset measurements are known
+    to be unreliable (e.g., due to ground station issues, spacecraft
+    anomalies, etc.).
+
+    Parameters
+    ----------
+    db_file : str, optional
+        Path to bad points database file. If None, uses the default
+        BAD_POINTS_DB.dat in the package data directory.
+
+    Returns
+    -------
+    bad_points : np.ndarray
+        Array of MET values (longdouble) marking bad measurement times.
+    """
+    if db_file is None:
+        db_file = _BAD_POINTS_FILE
+
+    if not os.path.exists(db_file):
+        log.warning(f"No local bad points database found. Using the default one.")
+        db_file = os.path.join(datadir, _BAD_POINTS_FILE)
+
+    log.info(f"Reading bad points from {db_file}")
     return np.genfromtxt(db_file, dtype=np.longdouble)
 
 
-def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
-    """
+def flag_bad_points(all_data, db_file=None):
+    """Flag known bad measurements in a clock offset table.
+
+    Adds or updates a 'flag' column in the table, setting True for
+    measurements at times listed in the bad points database.
+
+    Parameters
+    ----------
+    all_data : astropy.table.Table
+        Table with clock offset data. Must contain a 'met' column.
+        May already have a 'flag' column (which will be updated).
+    db_file : str, optional
+        Path to bad points database. If None, uses default.
+
+    Returns
+    -------
+    all_data : astropy.table.Table
+        Input table with 'flag' column added/updated.
 
     Examples
     --------
@@ -54,16 +212,13 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
     >>> all_data = Table({'met': [0, 1, 2, 3, 4]})
     >>> all_data = flag_bad_points(all_data, db_file='dummy_bad_points.dat')
     INFO: ...
-    >>> np.all(all_data['flag'] == [False, False, False, True, False])
+    >>> bool(np.all(all_data['flag'] == [False, False, False, True, False]))
     True
     """
-    if not os.path.exists(db_file):
-        all_data['flag'] = np.zeros(len(all_data), dtype=bool)
-        return all_data
-    log.info("Flagging bad points...")
 
     intv = [all_data['met'][0] - 0.5, all_data['met'][-1] + 0.5]
-    ALL_BAD_POINTS = np.genfromtxt(db_file)
+    ALL_BAD_POINTS = get_bad_points_db(db_file)
+    log.info("Sorting and filtering bad points...")
     ALL_BAD_POINTS.sort()
     ALL_BAD_POINTS = np.unique(ALL_BAD_POINTS)
     ALL_BAD_POINTS = ALL_BAD_POINTS[
@@ -71,6 +226,7 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
 
     idxs = all_data['met'].searchsorted(ALL_BAD_POINTS)
 
+    log.info("Flagging bad points...")
     if 'flag' in all_data.colnames:
         mask = np.array(all_data['flag'], dtype=bool)
     else:
@@ -81,11 +237,31 @@ def flag_bad_points(all_data, db_file='BAD_POINTS_DB.dat'):
             continue
         mask[idx] = True
     all_data['flag'] = mask
+    log.info("Finished flagging bad points.")
     return all_data
 
 
-def find_good_time_intervals(temperature_table,
-                             clock_jump_times=None):
+def find_good_time_intervals(temperature_table, clock_jump_times=None):
+    """Identify Good Time Intervals (GTIs) for clock correction processing.
+
+    GTIs are contiguous time ranges where:
+    1. Temperature data is available (no gaps > 600s)
+    2. No clock frequency jumps occur within the interval
+    3. Duration is at least half a day (43200 seconds)
+
+    Parameters
+    ----------
+    temperature_table : astropy.table.Table
+        Temperature table with 'met' column. May have 'gti' in metadata.
+    clock_jump_times : array-like, optional
+        MET values where clock frequency divisor changed. Each jump
+        creates a GTI boundary.
+
+    Returns
+    -------
+    gtis : np.ndarray
+        Array of shape (N, 2) with [start, stop] MET for each GTI.
+    """
     start_time = temperature_table['met'][0]
     stop_time = temperature_table['met'][-1]
 
@@ -100,14 +276,27 @@ def find_good_time_intervals(temperature_table,
     gtis = cross_two_gtis(temp_gtis, clock_gtis)
     lengths = gtis[:, 1] - gtis[:, 0]
     # ensure at least half a day duration for GTIs
-    good = lengths > 43200
+    good = lengths > HALF_DAY_SECONDS
     if not np.all(good):
         log.info(f"Some GTIs are too short. cleaning up: {gtis[~good]}")
+    for g, is_good in zip(gtis, good):
+        log.info(f"GTI: {g[0]}-{g[1]} ({'OK' if is_good else 'too short'})")
 
     return gtis[good]
 
 
 def calculate_stats(all_data):
+    """Calculate and print statistics on clock correction residuals.
+
+    Computes the Median Absolute Deviation (MAD) and rolling standard
+    deviation of the detrended residuals to assess correction quality.
+
+    Parameters
+    ----------
+    all_data : astropy.table.Table
+        Table with 'residual_detrend' column containing the residuals
+        between measured clock offsets and the temperature model.
+    """
     log.info("Calculating statistics")
     r_std = residual_roll_std(all_data['residual_detrend'])
 
@@ -116,26 +305,83 @@ def calculate_stats(all_data):
     print("----------------------------- Stats -----------------------------------")
     print()
     print(f"Overall MAD: {scatter * 1e6:.0f} us")
-    print(f"Minimum scatter: ±{np.min(r_std) * 1e6:.0f} us")
+    print(f"Minimum scatter: ±{np.nanmin(r_std) * 1e6:.0f} us")
     print()
     print("-----------------------------------------------------------------------")
 
 
-def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=False):
+def load_and_flag_clock_table(clockfile="latest_clock.dat", shift_non_malindi=False, db_file=None):
+    """Load clock offset table and flag known bad measurements.
+
+    Convenience function combining load_clock_offset_table and flag_bad_points.
+
+    Parameters
+    ----------
+    clockfile : str
+        Path to clock offset data file.
+    shift_non_malindi : bool
+        If True, subtract NON_MALINDI_OFFSET_SECONDS from non-Malindi
+        station measurements to align them with Malindi.
+    db_file : str, optional
+        Path to bad points database.
+
+    Returns
+    -------
+    clock_offset_table : astropy.table.Table
+        Clock offset table with 'flag' column populated.
+    """
     clock_offset_table = load_clock_offset_table(clockfile,
                                                  shift_non_malindi=shift_non_malindi)
+
+    # Column added/updated: 'flag' (bool) - True for known bad measurements based on db_file
     clock_offset_table = flag_bad_points(
-        clock_offset_table, db_file='BAD_POINTS_DB.dat')
+        clock_offset_table, db_file=db_file)
     return clock_offset_table
 
 
 def spline_detrending(clock_offset_table, temptable, outlier_cuts=None,
                       fixed_control_points=None):
+    """Fit a spline to clock residuals and add detrended correction to temptable.
+
+    This function:
+    1. Computes residuals between measured clock offsets and temperature model
+    2. Optionally removes outliers based on deviation from median-filtered signal
+    3. Fits a spline through the residuals to capture systematic trends
+    4. Adds the trend to the temperature correction to improve accuracy
+
+    Parameters
+    ----------
+    clock_offset_table : astropy.table.Table
+        Clock offset measurements with columns: 'met', 'offset', 'flag'.
+        Filtered to only include times within temptable range.
+    temptable : astropy.table.Table
+        Temperature table with 'met' and 'temp_corr' columns.
+        Modified in-place to add: 'std', 'temp_corr_trend', 'temp_corr_detrend'.
+    outlier_cuts : list of float, optional
+        Threshold values (in seconds) for iterative outlier removal.
+        Measurements deviating more than these thresholds from the median
+        are flagged, except for data in the most recent month.
+    fixed_control_points : array-like, optional
+        MET values where spline control points should be placed.
+
+    Returns
+    -------
+    temptable : astropy.table.Table
+        Input table with added columns:
+        - 'std': Rolling standard deviation of residuals
+        - 'temp_corr_trend': Spline fit to residuals
+        - 'temp_corr_detrend': temp_corr + temp_corr_trend (improved correction)
+    """
     tempcorr_idx = np.searchsorted(temptable['met'], clock_offset_table['met'])
     temperature_is_present = tempcorr_idx < temptable['met'].size
     tempcorr_idx = tempcorr_idx[temperature_is_present]
 
-    clock_offset_table = clock_offset_table[temperature_is_present]
+    clock_offset_table = filter_and_log_table(
+        clock_offset_table,
+        temperature_is_present,
+        intro_text="spline_detrending: Filtering clock_offset_table to times with temperature data",
+        comment_to_point="beyond temperature table range"
+        )
 
     clock_residuals = \
         np.array(clock_offset_table['offset'] -
@@ -155,11 +401,14 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None,
                        outlier_cuts[0])
             better_points[better_points] = ~wh
         # Eliminate too recent flags, in the last month of solution.
-        one_month = 86400 * 30
-        do_not_flag = clock_mets > clock_mets.max() - one_month
+        do_not_flag = clock_mets > clock_mets.max() - SECONDS_PER_MONTH
         better_points[do_not_flag] = True
 
-        clock_offset_table = clock_offset_table[better_points]
+        clock_offset_table = filter_and_log_table(
+            clock_offset_table,
+            better_points,
+            "spline_detrending: Filtering clock_offset_table outliers"
+            )
         clock_residuals = clock_residuals[better_points]
 
     detrend_fun = spline_through_data(
@@ -181,23 +430,66 @@ def spline_detrending(clock_offset_table, temptable, outlier_cuts=None,
     return temptable
 
 
-def eliminate_trends_in_residuals(temp_table, clock_offset_table,
+def eliminate_trends_in_residuals(temptable, clock_offset_table,
                                   gtis, debug=False,
                                   fixed_control_points=None):
+    """Remove systematic trends from temperature-model residuals within each GTI.
 
-    # good = clock_offset_table['met'] < np.max(temp_table['met'])
+    For each Good Time Interval (GTI), this function:
+    1. Extracts clock offset measurements and computes residuals vs temp model
+    2. Fits a low-order robust polynomial to the residuals
+    3. Adds the polynomial correction to the temperature model
+    4. For Bad Time Intervals (gaps between GTIs), interpolates the correction
+    5. Finally applies spline_detrending for fine-scale adjustments
+
+    The Malindi ground station is preferred for interpolation due to its
+    more reliable timing. During known Malindi outages, other stations
+    are used with a 0.5 ms offset correction.
+
+    Parameters
+    ----------
+    temptable : astropy.table.Table
+        Temperature correction table with 'met' and 'temp_corr' columns.
+        Modified in-place. Will have 'temp_corr_raw' added to preserve original.
+    clock_offset_table : astropy.table.Table
+        Clock offset measurements with 'met', 'offset', 'flag', 'station' columns.
+    gtis : np.ndarray
+        Array of shape (N, 2) with [start, stop] MET for each GTI.
+    debug : bool, optional
+        If True, save diagnostic plots for each GTI.
+    fixed_control_points : array-like, optional
+        MET values for spline control points in final detrending step.
+
+    Returns
+    -------
+    temptable : astropy.table.Table
+        Modified temperature table with improved 'temp_corr' and additional
+        diagnostic columns from spline_detrending.
+
+    Notes
+    -----
+    The function distinguishes between:
+    - GTIs: Intervals with good temperature data, processed with polynomial fits
+    - BTIs: Gaps between GTIs, handled by interpolation from nearby good data
+    """
+    # good = clock_offset_table['met'] < np.max(temptable['met'])
     # clock_offset_table = clock_offset_table[good]
-    temp_table['temp_corr_raw'] = temp_table['temp_corr']
+    temptable['temp_corr_raw'] = temptable['temp_corr']
 
-    tempcorr_idx = np.searchsorted(temp_table['met'],
+    tempcorr_idx = np.searchsorted(temptable['met'],
                                    clock_offset_table['met'])
-    temperature_is_present = tempcorr_idx < temp_table['met'].size
+    temperature_is_present = tempcorr_idx < temptable['met'].size
     tempcorr_idx = tempcorr_idx[temperature_is_present]
 
-    clock_offset_table = clock_offset_table[temperature_is_present]
+    clock_offset_table = filter_and_log_table(
+        clock_offset_table,
+        temperature_is_present,
+        intro_text="eliminate_trends_in_residuals: Filtering clock_offset_table to times with temperature data",
+        comment_to_point="beyond temperature table range"
+        )
 
     clock_residuals = \
-        clock_offset_table['offset'] - temp_table['temp_corr'][tempcorr_idx]
+        clock_offset_table['offset'] - temptable['temp_corr'][tempcorr_idx]
 
     # Only use for interpolation Malindi points; however, during the Malindi
     # problem in 2013, use the other data for interpolation but subtracting
@@ -210,7 +502,14 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
     good = (clock_residuals == clock_residuals) & ~clock_offset_table['flag'] & use_for_interpol
 
-    clock_offset_table = clock_offset_table[good]
+    clock_offset_table = filter_and_log_table(
+        clock_offset_table,
+        good,
+        intro_text="eliminate_trends_in_residuals: Filtering clock_offset_table to "
+                 "trustworthy points (Malindi or during Malindi outage)",
+        comment_to_point="bad point or not from Malindi",
+        point_log_func=log.debug
+    )
     clock_residuals = clock_residuals[good]
 
     for g in gtis:
@@ -225,9 +524,9 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
             continue
 
         temp_idx_start, temp_idx_end = \
-            np.searchsorted(temp_table['met'], g)
+            np.searchsorted(temptable['met'], g)
 
-        table_new = temp_table[temp_idx_start:temp_idx_end]
+        table_new = temptable[temp_idx_start:temp_idx_end]
         cltable_new = clock_offset_table[cl_idx_start:cl_idx_end]
         met = cltable_new['met']
 
@@ -247,12 +546,6 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         log.info(f"Fitting a polinomial of order {poly_order}")
         p = robust_poly_fit(met_rescale, residuals, order=poly_order,
                             p0=p0)
-        # if poly_order >=2:
-        import matplotlib.pyplot as plt
-        # plt.figure()
-        # plt.plot(met_rescale, residuals)
-        # plt.plot(met_rescale, p(met_rescale))
-        # plt.plot(met_rescale, m * (met_rescale) + q)
 
         table_mets_rescale = (table_new['met'] - met0) / (met[-1] - met0)
         corr = p(table_mets_rescale)
@@ -260,8 +553,6 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         sub_residuals = residuals - p(met_rescale)
         m = (sub_residuals[-1] - sub_residuals[0]) / (met_rescale[-1] - met_rescale[0])
         q = sub_residuals[0]
-
-        # plt.plot(table_mets_rescale, corr + m * (table_mets_rescale - met_rescale[0]) + q, lw=2)
 
         corr = corr + m * (table_mets_rescale - met_rescale[0]) + q
         table_new['temp_corr'] += corr
@@ -280,7 +571,7 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
     bti_list = [[0, 77674700]]
     bti_list += [[g0, g1] for g0, g1 in zip(gtis[:-1, 1], gtis[1:, 0])]
-    bti_list += [[gtis[-1, 1], max(clock_offset_table['met'][-1], temp_table['met'][-1]) + 10000]]
+    bti_list += [[gtis[-1, 1], max(clock_offset_table['met'][-1], temptable['met'][-1]) + 10000]]
     btis = np.array(bti_list)
     # Interpolate the solution along bad time intervals
     for g in btis:
@@ -288,26 +579,26 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
         log.info(f"Treating bad data from METs {start}--{stop}")
 
         temp_idx_start, temp_idx_end = \
-            np.searchsorted(temp_table['met'], g)
+            np.searchsorted(temptable['met'], g)
         cl_idx_start, cl_idx_end = \
             np.searchsorted(clock_offset_table['met'], g)
         if temp_idx_end - temp_idx_start == 0 and \
-                temp_idx_end < len(temp_table) and temp_idx_start > 0:
+                temp_idx_end < len(temptable) and temp_idx_start > 0:
             log.info("No temperature measurements in this interval")
             continue
         else:
-            table_new = temp_table[temp_idx_start:temp_idx_end]
+            table_new = temptable[temp_idx_start:temp_idx_end]
 
-            last_good_tempcorr = temp_table['temp_corr'][temp_idx_start - 1]
-            last_good_time = temp_table['met'][temp_idx_start - 1]
+            last_good_tempcorr = temptable['temp_corr'][temp_idx_start - 1]
+            last_good_time = temptable['met'][temp_idx_start - 1]
 
             local_clockoff = clock_offset_table[max(cl_idx_start - 1, 0):cl_idx_end + 1]
             clock_off = local_clockoff['offset']
             clock_tim = local_clockoff['met']
 
-            if temp_idx_end < temp_table['temp_corr'].size:
-                next_good_tempcorr = temp_table['temp_corr'][temp_idx_end + 1]
-                next_good_time = temp_table['met'][temp_idx_end + 1]
+            if temp_idx_end < temptable['temp_corr'].size:
+                next_good_tempcorr = temptable['temp_corr'][temp_idx_end + 1]
+                next_good_time = temptable['met'][temp_idx_end + 1]
                 clock_off = np.concatenate(
                     ([last_good_tempcorr], clock_off, [next_good_tempcorr]))
                 clock_tim = np.concatenate(
@@ -339,24 +630,25 @@ def eliminate_trends_in_residuals(temp_table, clock_offset_table,
 
     log.info("Final detrending...")
 
+    # Columns added to temptable: 'std', 'temp_corr_trend', 'temp_corr_detrend'
     table_new = spline_detrending(
-        clock_offset_table, temp_table,
+        clock_offset_table, temptable,
         outlier_cuts=[-0.002, -0.001],
         fixed_control_points=fixed_control_points)
     return table_new
 
 
 def residual_roll_std(residuals, window=30):
-    """
+    """Calculate the rolling standard deviation of clock residuals.
 
     Examples
     --------
     >>> residuals = np.zeros(5000)
     >>> residuals[:4000] = np.random.normal(0, 1, 4000)
     >>> roll_std = residual_roll_std(residuals, window=500)
-    >>> np.allclose(roll_std[:3500], 1., rtol=0.2)
+    >>> bool(np.allclose(roll_std[:3500], 1., rtol=0.2))
     True
-    >>> np.all(roll_std[4500:] == 0.)
+    >>> bool(np.all(roll_std[4500:] == 0.))
     True
     """
     r_std = rolling_std(residuals, window)
@@ -478,7 +770,8 @@ def _look_for_freq_change_file():
 
 
 def read_clock_offset_table(clockoffset_file=None, shift_non_malindi=False):
-    """
+    """Read the clock offset table from a file and prepare it for processing.
+
     Parameters
     ----------
     clockoffset_file : str
@@ -500,10 +793,10 @@ def read_clock_offset_table(clockoffset_file=None, shift_non_malindi=False):
         all_but_malindi = clock_offset_table['station'] != 'MLD'
         clock_offset_table['offset'][all_but_malindi] -= 0.0005
     clock_offset_table['mjd'] = sec_to_mjd(clock_offset_table['met'])
-    clock_offset_table.remove_row(len(clock_offset_table) - 1)
+    # clock_offset_table.remove_row(len(clock_offset_table) - 1)
     clock_offset_table['flag'] = np.zeros(len(clock_offset_table), dtype=bool)
 
-    log.info("Flagging bad points...")
+    log.info("Flagging bad points in clock offset table...")
     ALL_BAD_POINTS = get_bad_points_db()
 
     for b in ALL_BAD_POINTS:
@@ -528,14 +821,32 @@ FREQ_CHANGE_DB= {"delete": [77509247, 78720802],
 
 
 def no_jump_gtis(start_time, stop_time, clock_jump_times=None):
-    """
+    """Create GTIs that avoid clock frequency jump times.
+
+    Splits a time range into segments at each clock jump, so that
+    no segment contains a frequency divisor change.
+
+    Parameters
+    ----------
+    start_time : float
+        Start of time range (MET).
+    stop_time : float
+        End of time range (MET).
+    clock_jump_times : array-like, optional
+        MET values where clock jumps occur.
+
+    Returns
+    -------
+    gtis : np.ndarray
+        Array of [start, stop] pairs, one per segment.
+
     Examples
     --------
     >>> gtis = no_jump_gtis(0, 3, [1, 1.1])
-    >>> np.allclose(gtis, [[0, 1], [1, 1.1], [1.1, 3]])
+    >>> bool(np.allclose(gtis, [[0, 1], [1, 1.1], [1.1, 3]]))
     True
     >>> gtis = no_jump_gtis(0, 3)
-    >>> np.allclose(gtis, [[0, 3]])
+    >>> bool(np.allclose(gtis, [[0, 3]]))
     True
     """
     if clock_jump_times is None:
@@ -552,17 +863,33 @@ def no_jump_gtis(start_time, stop_time, clock_jump_times=None):
 
 
 def temperature_gtis(temperature_table, max_distance=600):
-    """
+    """Identify GTIs based on temperature data continuity.
+
+    Creates GTIs where consecutive temperature measurements are within
+    max_distance seconds of each other. Gaps larger than this indicate
+    missing data and create GTI boundaries.
+
+    Parameters
+    ----------
+    temperature_table : astropy.table.Table
+        Table with 'met' column of measurement times.
+    max_distance : float, optional
+        Maximum allowed gap (seconds) between measurements. Default 600s.
+
+    Returns
+    -------
+    gtis : np.ndarray
+        Array of shape (N, 2) with [start, stop] MET for each GTI.
 
     Examples
     --------
     >>> temperature_table = Table({'met': [0, 1, 2, 10, 11, 12]})
     >>> gti = temperature_gtis(temperature_table, 5)
-    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    >>> bool(np.allclose(gti, [[0, 2], [10, 12]]))
     True
     >>> temperature_table = Table({'met': [-10, 0, 1, 2, 10, 11, 12, 20]})
     >>> gti = temperature_gtis(temperature_table, 5)
-    >>> np.allclose(gti, [[0, 2], [10, 12]])
+    >>> bool(np.allclose(gti, [[0, 2], [10, 12]]))
     True
     """
     temp_condition = np.concatenate(
@@ -590,16 +917,27 @@ def temperature_gtis(temperature_table, max_distance=600):
 
 
 def read_freq_changes_table(freqchange_file=None, filter_bad=True):
-    """Read the table with the list of commanded divisor frequencies.
+    """Read the table of commanded clock frequency divisor changes.
+
+    The clock divisor determines the tick rate of the spacecraft clock.
+    This table records when the divisor was commanded to change, which
+    causes discontinuities in the clock drift that must be handled
+    separately.
 
     Parameters
     ----------
-    freqchange_file : str
-        e.g. 'nustar_freq_changes-2018-10-30.dat'
+    freqchange_file : str, optional
+        Path to frequency changes file (e.g., 'nustar_freq_changes-2018-10-30.dat').
+        If None, uses the latest file in the data directory.
+    filter_bad : bool, optional
+        If True (default), remove entries with anomalous divisor values
+        (more than ±20 from 2.400034e7).
 
     Returns
     -------
-    freq_changes_table : `astropy.table.Table` object
+    freq_changes_table : astropy.table.Table
+        Table with columns: 'uxt', 'met', 'divisor', 'mjd', 'flag'.
+        Sorted by MET. Known bad entries are corrected per FREQ_CHANGE_DB.
     """
     if freqchange_file is None:
         freqchange_file = _look_for_freq_change_file()
@@ -618,21 +956,43 @@ def read_freq_changes_table(freqchange_file=None, filter_bad=True):
     freq_changes_table.sort('met')
 
     freq_changes_table['mjd'] = sec_to_mjd(freq_changes_table['met'])
-    freq_changes_table.remove_row(len(freq_changes_table) - 1)
+    # freq_changes_table.remove_row(len(freq_changes_table) - 1)
     freq_changes_table['flag'] = \
         np.abs(freq_changes_table['divisor'] - 2.400034e7) > 20
+
     if filter_bad:
-        freq_changes_table = freq_changes_table[~freq_changes_table['flag']]
+        freq_changes_table = filter_and_log_table(
+            freq_changes_table,
+            ~freq_changes_table['flag'],
+            intro_text="read_freq_changes_table: Filtering freq_changes_table to remove bad points",
+            comment_to_point="bad frequency change point",
+            point_log_func=log.debug
+            )
 
     return freq_changes_table
 
 
-def _filter_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
-    try:
-        from datetime import timezone
-    except ImportError:
-        # Python 2
-        import pytz as timezone
+def _filter_csv_temperature_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
+    """Filter the CSV temperature table to only include rows within a specified date range.
+
+    Parameters
+    ----------
+    tablefile : str
+        Path to the input CSV temperature table file.
+    start_date : float, optional
+        Start date for filtering (MJD).
+    end_date : float, optional
+        End date for filtering (MJD).
+    tmpfile : str, optional
+        Path to the temporary filtered file.
+
+    Returns
+    -------
+    tmpfile : str
+        Path to the filtered CSV temperature table file.
+    """
+    from datetime import timezone
+
     if start_date is None:
         start_date = 0
     if end_date is None:
@@ -680,6 +1040,22 @@ def _filter_table(tablefile, start_date=None, end_date=None, tmpfile='tmp.csv'):
 
 
 def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
+    """Read the temperature table from a CSV file, optionally filtering by MJD range.
+
+    Parameters
+    ----------
+    mjdstart : float, optional
+        Start MJD for filtering the temperature table. If None, no lower bound is applied.
+    mjdstop : float, optional
+        Stop MJD for filtering the temperature table. If None, no upper bound is applied.
+    temperature_file : str, optional
+        Path to the CSV temperature table file. If None, the default file is used.
+
+    Returns
+    -------
+    temptable : Table
+        The filtered temperature table.
+    """
     if mjdstart is not None or mjdstop is not None:
         mjdstart_use = mjdstart
         mjdstop_use = mjdstop
@@ -688,7 +1064,7 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
         if mjdstop is not None:
             mjdstop_use += 10
         log.info("Filtering table...")
-        tmpfile = _filter_table(temperature_file,
+        tmpfile = _filter_csv_temperature_table(temperature_file,
                                 start_date=mjdstart_use,
                                 end_date=mjdstop_use, tmpfile='tmp.csv')
         log.info("Done")
@@ -702,8 +1078,9 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
                      in_subfmt="date_hms").mjd
     log.info("Done.")
     temptable["mjd"] = np.array(times_mjd)
-    temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * 86400
+    temptable['met'] = (temptable["mjd"] - NUSTAR_MJDREF) * SECONDS_PER_DAY
     temptable.remove_column('Time')
+    temptable.sort("met")
     temptable.rename_column('tp_eps_ceu_txco_tmp', 'temperature')
     temptable["temperature"] = np.array(temptable["temperature"], dtype=float)
     if os.path.exists('tmp.csv'):
@@ -714,6 +1091,22 @@ def read_csv_temptable(mjdstart=None, mjdstop=None, temperature_file=None):
 
 def read_saved_temptable(mjdstart=None, mjdstop=None,
                          temperature_file='temptable.hdf5'):
+    """Read a previously saved temperature table from an HDF5 file.
+
+    Parameters
+    ----------
+    mjdstart : float, optional
+        Start MJD for filtering the temperature table. If None, no lower bound is applied.
+    mjdstop : float, optional
+        Stop MJD for filtering the temperature table. If None, no upper bound is applied.
+    temperature_file : str, optional
+        Path to the HDF5 temperature table file. If None, the default file is used.
+
+    Returns
+    -------
+    temptable : Table
+        The filtered temperature table.
+    """
     table = Table.read(temperature_file)
     if mjdstart is None and mjdstop is None:
         return table
@@ -734,6 +1127,18 @@ def read_saved_temptable(mjdstart=None, mjdstop=None,
 
 
 def read_fits_temptable(temperature_file):
+    """Read the temperature table from a FITS file, e.g. those from the HK data.
+
+    Parameters
+    ----------
+    temperature_file : str
+        Path to the FITS temperature table file.
+
+    Returns
+    -------
+    temptable : Table
+        The temperature table.
+    """
     with fits.open(temperature_file) as hdul:
         temptable = Table.read(hdul['ENG_0x133'])
         temptable.rename_column('TIME', 'met')
@@ -746,6 +1151,7 @@ def read_fits_temptable(temperature_file):
 
 
 def interpolate_temptable(temptable, dt=10):
+    """Interpolate the temperature table to a regular time grid with spacing dt."""
     time = temptable['met']
     temperature = temptable['temperature']
     new_times = np.arange(time[0], time[-1], dt)
@@ -755,6 +1161,29 @@ def interpolate_temptable(temptable, dt=10):
 
 def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
                    dt=None, gti_tolerance=600):
+    """Read the temperature table, handling different formats.
+
+    Parameters
+    ----------
+    temperature_file : str, optional
+        Path to the temperature table file. If None, the default file is used.
+
+    Other parameters
+    ----------------
+    mjdstart : float, optional
+        Start MJD for filtering the temperature table. If None, no lower bound is applied.
+    mjdstop : float, optional
+        Stop MJD for filtering the temperature table. If None, no upper bound is applied.
+    dt : float, optional
+        Time resolution for interpolation. If None, no interpolation is done. Default is None.
+    gti_tolerance : float, optional
+        Maximum gap (seconds) between temperature measurements to be considered a GTI. Default is
+        600 seconds.
+    Returns
+    -------
+    temptable : Table
+        The temperature table with columns 'met', 'temperature', 'mjd', and optionally 'temperature_smooth' and 'temperature_smooth_gradient'.
+    """
     if temperature_file is None:
         temperature_file = _look_for_temptable()
     log.info(f"Reading temperature_information from {temperature_file}")
@@ -779,7 +1208,14 @@ def read_temptable(temperature_file=None, mjdstart=None, mjdstop=None,
     else:
         good = np.diff(temptable['met']) > 0
         good = np.concatenate((good, [True]))
-        temptable = temptable[good]
+
+        temptable = filter_and_log_table(
+            temptable,
+            good,
+            intro_text="read_temptable: Filtering temptable for non-increasing time points",
+            comment_to_point="non-increasing time point",
+            point_log_func=log.debug
+        )
     temptable.meta['gti'] = temp_gtis
 
     window = np.median(1000 / np.diff(temptable['met']))
@@ -800,10 +1236,17 @@ def load_temptable(temptable_name):
     IS_CSV = temptable_name.endswith('.csv')
     hdf5_name = temptable_name.replace('.csv', '.hdf5')
 
-    if IS_CSV and os.path.exists(hdf5_name):
+    h5_exists = os.path.exists(hdf5_name)
+    h5_newer = h5_exists and os.path.getmtime(hdf5_name) > os.path.getmtime(temptable_name)
+    if IS_CSV and h5_exists and not h5_newer:
+        log.info(f"HDF5 file {hdf5_name} is older than CSV file {temptable_name}. "
+                 "Re-reading from CSV and overwriting HDF5.")
+    if IS_CSV and h5_newer:
         IS_CSV = False
+        # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(hdf5_name, dt=10)
     else:
+        # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable_raw = read_temptable(temptable_name, dt=10)
 
     if IS_CSV:
@@ -814,17 +1257,64 @@ def load_temptable(temptable_name):
 
 @lru_cache(maxsize=64)
 def load_freq_changes(freq_change_file):
+    # Returns table with: 'uxt', 'met', 'divisor', 'mjd', 'flag'
     log.info(f"Reading data from {freq_change_file}")
     return read_freq_changes_table(freq_change_file)
 
 
 @lru_cache(maxsize=64)
 def load_clock_offset_table(clock_offset_file, shift_non_malindi=False):
+    # Returns table with: 'met', 'offset', 'station', 'mjd', 'flag'
     return read_clock_offset_table(clock_offset_file,
                                    shift_non_malindi=shift_non_malindi)
 
 
 class ClockCorrection():
+    """Main class for computing NuSTAR temperature-based clock corrections.
+
+    This class orchestrates the full clock correction pipeline:
+    1. Loads temperature data and clock offset measurements
+    2. Computes temperature-dependent clock drift model
+    3. Optionally adjusts the model using measured clock offsets
+    4. Can write CALDB-compatible clock correction FITS files
+
+    Parameters
+    ----------
+    temperature_file : str
+        Path to temperature data file (CSV or HDF5).
+    mjdstart, mjdstop : float, optional
+        MJD range for the correction. If None, derived from data.
+    temperature_dt : float, optional
+        Time resolution for temperature interpolation. Default 10s.
+    adjust_absolute_timing : bool, optional
+        If True, adjust the temperature model using measured clock offsets
+        via eliminate_trends_in_residuals. Default False.
+    force_divisor : int, optional
+        Force a specific clock divisor value instead of reading from file.
+    label : str, optional
+        Label for output files.
+    additional_days : float, optional
+        Extra days of data to load beyond requested range. Default 2.
+    clock_offset_file : str, optional
+        Path to clock offset measurements file.
+    hdf_dump_file : str, optional
+        Path for caching intermediate results.
+    freqchange_file : str, optional
+        Path to frequency changes file.
+    spline_through_residuals : bool, optional
+        Reserved for future use.
+
+    Attributes
+    ----------
+    temptable : astropy.table.Table
+        Temperature data table.
+    clock_offset_table : astropy.table.Table
+        Clock offset measurements.
+    temperature_correction_data : astropy.table.Table
+        Computed correction table with 'met', 'temp_corr', etc.
+    gtis : np.ndarray
+        Good Time Intervals for processing.
+    """
     def __init__(self, temperature_file, mjdstart=None, mjdstop=None,
                  temperature_dt=10, adjust_absolute_timing=False,
                  force_divisor=None, label="", additional_days=2,
@@ -841,6 +1331,7 @@ class ClockCorrection():
         self.mjdstart = mjdstart
         self.mjdstop = mjdstop
 
+        # Sets self.temptable with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         self.read_temptable()
 
         if mjdstart is None:
@@ -849,6 +1340,7 @@ class ClockCorrection():
             mjdstart = mjdstart - additional_days / 2
 
         self.clock_offset_file = clock_offset_file
+        # Returns table with: 'met', 'offset', 'station', 'mjd', 'flag'
         self.clock_offset_table = \
             read_clock_offset_table(self.clock_offset_file,
                                     shift_non_malindi=True)
@@ -862,8 +1354,8 @@ class ClockCorrection():
         self.mjdstart = mjdstart
         self.mjdstop = mjdstop
 
-        self.met_start = (self.mjdstart - NUSTAR_MJDREF) * 86400
-        self.met_stop = (self.mjdstop - NUSTAR_MJDREF) * 86400
+        self.met_start = (self.mjdstart - NUSTAR_MJDREF) * SECONDS_PER_DAY
+        self.met_stop = (self.mjdstop - NUSTAR_MJDREF) * SECONDS_PER_DAY
 
         if label is None or label == "":
             label = f"{self.met_start}-{self.met_stop}"
@@ -874,10 +1366,9 @@ class ClockCorrection():
         self.hdf_dump_file = hdf_dump_file
         self.plot_file = label + "_clock_adjustment.png"
 
-        self.clock_jump_times = \
-            np.array([78708320, 79657575, 81043985, 82055671, 293346772,
-            392200784, 394825882, 395304135,407914525, 408299422])
-        self.fixed_control_points = np.arange(291e6, 295e6, 86400)
+        self.clock_jump_times = KNOWN_CLOCK_JUMP_TIMES
+
+        self.fixed_control_points = FIXED_CONTROL_POINTS
         #  Sum 30 seconds to avoid to exclude these points
         #  from previous interval
         self.gtis = find_good_time_intervals(
@@ -895,6 +1386,7 @@ class ClockCorrection():
         if adjust_absolute_timing:
             log.info("Adjusting temperature correction")
             try:
+                # Adds 'temp_corr_nodetrend'; replaces 'temp_corr' with detrended version
                 self.adjust_temperature_correction()
             except Exception:
                 logfile = 'adjust_temperature_error.log'
@@ -904,10 +1396,12 @@ class ClockCorrection():
                     traceback.print_exc(file=fobj)
 
     def read_temptable(self, cache_temptable_name=None):
+        """Read the temperature table, using a cached version if available."""
         if cache_temptable_name is not None and \
                 os.path.exists(cache_temptable_name):
             self.temptable = Table.read(cache_temptable_name, path='temptable')
         else:
+            # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
             self.temptable = \
                     read_temptable(temperature_file=self.temperature_file,
                                    mjdstart=self.mjdstart,
@@ -917,12 +1411,23 @@ class ClockCorrection():
                 self.temptable.write(cache_temptable_name, path='temptable')
 
     def temperature_correction_fun(self, adjust=False):
+        """Create an interpolating function for the temperature correction.
+
+        Uses PCHIP interpolation to create a smooth function that can be evaluated
+        at any time. If adjust is True, uses the adjusted temperature correction data.
+        """
         data = self.temperature_correction_data
+
+        if not adjust:
+            warnings.warn("Since the use of PCHIP interpolation, the adjust option is "
+                          "ignored. The function will always use the adjusted temperature correction data.")
 
         return PchipInterpolator(np.array(data['met']), np.array(data['temp_corr']),
                         extrapolate=True)
 
     def adjust_temperature_correction(self):
+        """Adjust the temperature correction using measured clock offsets."""
+        # Adds 'temp_corr_detrend' column to returned table
         table_new = eliminate_trends_in_residuals(
             self.temperature_correction_data,
             load_clock_offset_table(
@@ -938,6 +1443,25 @@ class ClockCorrection():
 
     def write_clock_file(self, filename=None, save_nodetrend=False,
                          shift_times=0., highres=False):
+        """Write a CALDB-compatible clock correction FITS file with the temperature correction.
+
+
+        Parameters
+        ----------
+        filename : str, optional
+            Path to the output FITS file. If None, defaults to 'new_clock_file.fits'.
+        save_nodetrend : bool, optional
+            If True, also save the non-detrended temperature correction in the FITS file.
+        shift_times : float, optional
+            Time shift (seconds) to apply to the clock offset correction. Default is 0. This can be used to align the correction with the measured clock offsets if needed.
+        highres : bool, optional
+            If True, save the clock correction at the full time resolution of the temperature table. If False (default), save a subsampled version with points every 100 seconds, and more points around known clock jump times.
+
+        Returns
+        -------
+        None
+            Writes the clock correction data to the specified FITS file.
+        """
         from astropy.io.fits import Header, HDUList, BinTableHDU, PrimaryHDU
         from astropy.time import Time
 
@@ -945,15 +1469,29 @@ class ClockCorrection():
             filename = 'new_clock_file.fits'
         table_new = self.temperature_correction_data
         clock_offset_table = self.clock_offset_table
-        clock_offset_table = clock_offset_table[
-            clock_offset_table['met'] < table_new['met'][-1]]
+
+        good_clock = clock_offset_table['met'] < table_new['met'][-1]
+
+        clock_offset_table = filter_and_log_table(
+            clock_offset_table,
+            good_clock,
+            intro_text="write_clock_file: Filtering clock_offset_table to remove points"
+            " beyond the temperature table range",
+            comment_to_point="beyound temperature range",
+        )
 
         tempcorr_idx = np.searchsorted(table_new['met'],
                                        clock_offset_table['met'])
         temperature_is_present = tempcorr_idx < table_new['met'].size
         tempcorr_idx = tempcorr_idx[temperature_is_present]
 
-        clock_offset_table = clock_offset_table[temperature_is_present]
+        clock_offset_table = filter_and_log_table(
+            clock_offset_table,
+            temperature_is_present,
+            intro_text="write_clock_file: Filtering clock_offset_table to remove points"
+            " without temperature information",
+            comment_to_point="no temperature data present",
+        )
 
         clock_residuals_detrend = clock_offset_table['offset'] - \
                                   table_new['temp_corr'][tempcorr_idx]
@@ -995,7 +1533,7 @@ class ClockCorrection():
         if not highres:
             good_for_clockfile = np.zeros(allmets.size, dtype=bool)
             good_for_clockfile[::100] = True
-            twodays = 86400 * 2
+            twodays = SECONDS_PER_DAY * 2
             for jumptime in self.clock_jump_times:
                 idx0, idx1 = np.searchsorted(
                     allmets, [jumptime - twodays, jumptime + twodays])
@@ -1162,6 +1700,20 @@ class ClockCorrection():
 
 
 def interpolate_clock_function(new_clock_table, mets):
+    """Interpolate the clock correction function at the given METs using the new clock table.
+
+    Parameters
+    ----------
+    new_clock_table : astropy.table.Table
+        The new clock correction table with columns 'TIME', 'CLOCK_OFF_CORR', and 'CLOCK_FREQ_CORR'
+    mets : array-like
+        The METs at which to interpolate the clock correction
+
+    Returns
+    -------
+    tuple
+        A tuple containing the interpolated clock corrections and a boolean mask indicating which METs were successfully interpolated
+    """
     tab_times = new_clock_table['TIME']
     good_mets = (mets > tab_times.min()) & (mets < tab_times.max())
     mets = mets[good_mets]
@@ -1179,6 +1731,26 @@ def interpolate_clock_function(new_clock_table, mets):
 
 
 def _analyze_residuals(filtered_data, nbins=101, fit_range=[-np.inf, np.inf]):
+    """Analyze the residuals by fitting a Gaussian to the histogram of the filtered data.
+
+    Parameters
+    ----------
+    filtered_data : array-like
+        The data to analyze, typically the residuals after detrending.
+    nbins : int, optional
+        The number of bins to use for the histogram. Default is 101.
+    fit_range : list, optional
+        The range of values to consider for fitting the Gaussian. Default is [-inf, inf].
+
+    Returns
+    -------
+    edges: array-like
+        edges of the histogram bins,
+    frequencies: array-like
+        the normalized frequencies
+    info_dict: dict
+        a dictionary of statistics including the median, MAD, and fitted Gaussian parameters.
+    """
     frequencies, edges = np.histogram(
         filtered_data,
         bins=np.linspace(-1000, 1500, nbins)
@@ -1225,7 +1797,14 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
         plt.show()
 
     yint = - yint
-    clock_offset_table = clock_offset_table[good_mets]
+
+    clock_offset_table = filter_and_log_table(
+        clock_offset_table,
+        good_mets,
+        intro_text="plot_scatter: Filtering clock_offset_table to remove points beyond interpolation range",
+        comment_to_point="beyond interpolation range",
+    )
+
     clock_offset_table['offset'] -= shift_times
     clock_mets = clock_offset_table['met']
     clock_mjds = clock_offset_table['mjd']
@@ -1393,6 +1972,41 @@ def plot_scatter(new_clock_table, clock_offset_table, shift_times=0,
 
 
 class NuSTARCorr():
+    """Apply clock correction to a NuSTAR event file.
+
+    Convenience class that creates a ClockCorrection for a specific
+    observation and applies it to the event times.
+
+    Parameters
+    ----------
+    events_file : str
+        Path to input NuSTAR event file (FITS).
+    outfile : str, optional
+        Path for output corrected file. Default: input with '_tc' suffix.
+    adjust : bool, optional
+        If True, adjust temperature model using clock offsets. Default True.
+    force_divisor : int, optional
+        Force a specific clock divisor value.
+    temperature_file : str, optional
+        Path to temperature data. If None, uses default.
+    hdf_dump_file : str, optional
+        Path for caching intermediate results.
+
+    Attributes
+    ----------
+    clock_correction : ClockCorrection
+        The underlying correction calculator.
+    temperature_correction_fun : callable
+        Interpolation function for the correction.
+    tstart, tstop : float
+        Observation time range (MET).
+
+    Examples
+    --------
+    >>> corr = NuSTARCorr('nu12345_01_cl.evt')  # doctest: +SKIP
+    >>> corr.apply_clock_correction()  # doctest: +SKIP
+    'nu12345_01_cl_tc.evt'
+    """
     def __init__(self, events_file, outfile=None,
                  adjust=True, force_divisor=None,
                  temperature_file=None, hdf_dump_file=None):
@@ -1426,11 +2040,19 @@ class NuSTARCorr():
             self.clock_correction.temperature_correction_fun(adjust=adjust)
 
     def read_observation_info(self):
+        """Read TSTART and TSTOP from the event file header."""
         with fits.open(self.events_file) as hdul:
             hdr = hdul[1].header
             self.tstart, self.tstop = hdr['TSTART'], hdr['TSTOP']
 
     def apply_clock_correction(self):
+        """Apply the clock correction to the event times and write a new FITS file.
+
+        Returns
+        -------
+        str
+            Path to the output corrected FITS file.
+        """
         events_file = self.events_file
         outfile = self.outfile
 
@@ -1450,6 +2072,28 @@ class NuSTARCorr():
 
 
 def simpcumquad(x, y):
+    """Cumulative Simpson's rule integration for equally-spaced data.
+
+    Computes the cumulative integral of y(x) using Simpson's rule,
+    returning the integrated value at each sample point.
+
+    Parameters
+    ----------
+    x : array-like
+        Independent variable values (must be equally spaced).
+    y : array-like
+        Dependent variable values to integrate.
+
+    Returns
+    -------
+    integral : np.ndarray
+        Cumulative integral values at each x point.
+
+    Raises
+    ------
+    ValueError
+        If x and y have different lengths or x is empty.
+    """
     n = len(x)
 
     if (n != len(y)):
@@ -1483,30 +2127,71 @@ def simpcumquad(x, y):
 
 
 def abs_des_fun(x, b0, b1, b2, b3, t0=77509250):
-    """An absorption-desorption function"""
-    x = (x - t0) / 86400. / 365.25
+    """Absorption-desorption function for long-term clock drift.
+
+    Models the long-term systematic drift of the TCXO due to material
+    outgassing and other aging effects. The drift follows a sum of
+    logarithmic terms representing different decay processes.
+
+    Parameters
+    ----------
+    x : array-like
+        Time values in MET (Mission Elapsed Time in seconds).
+    b0, b1, b2, b3 : float
+        Model coefficients for the two logarithmic components.
+    t0 : float, optional
+        Reference epoch in MET. Default is ABS_DES_REFERENCE_MET (77509250),
+        corresponding to early mission.
+
+    Returns
+    -------
+    drift : np.ndarray
+        Long-term drift contribution in ppm.
+
+    Notes
+    -----
+    The function computes: b0*ln(b1*t + 1) + b2*ln(b3*t + 1)
+    where t is time in years since t0.
+    """
+    x = (x - t0) / SECONDS_PER_YEAR
     return b0 * np.log(b1 * x + 1) + b2 * np.log(b3 * x + 1)
 
 
 def clock_ppm_model(nustar_met, temperature, craig_fit=False, version=None, pars=None):
-    """Improved clock model
+    """Compute the clock frequency deviation model in parts-per-million.
+
+    The NuSTAR TCXO frequency varies with both temperature and time.
+    This function combines:
+    1. A quadratic temperature dependence around a reference temperature
+    2. A long-term drift modeled by absorption-desorption functions
 
     Parameters
     ----------
-    time : np.array of floats
-        Times in MET
-    temperature : np.array of floats
-        TCXO Temperatures in C
-    T0 : float
-        Reference temperature
-    ppm_vs_T_pars : list
-        parameters of the ppm-temperature relation
-    ppm_vs_T_pars : list
-        parameters of the ppm-time relation (long-term clock decay)
-    version : str
-        Version of the model to use. If None, use the latest
-    pars : dict
-        Parameters of the model, forced to be used
+    nustar_met : array-like
+        Mission Elapsed Time values in seconds.
+    temperature : array-like
+        TCXO temperature values in Celsius.
+    craig_fit : bool, optional
+        If True, use the original Craig Markwardt fit parameters.
+    version : str, optional
+        Model version identifier. If None, uses the latest version.
+    pars : dict, optional
+        Override model parameters. Expected keys:
+        - 'T0': Reference temperature
+        - 'offset': Constant ppm offset
+        - 'ppm_vs_T_pars': [linear_coeff, quadratic_coeff]
+        - 'ppm_vs_time_pars': [b0, b1, b2, b3] for abs_des_fun
+
+    Returns
+    -------
+    ppm : np.ndarray
+        Clock frequency deviation in parts-per-million. Positive values
+        mean the clock runs fast; negative means it runs slow.
+
+    See Also
+    --------
+    abs_des_fun : Long-term drift component
+    temperature_delay : Integrates ppm to get time delay
     """
     if craig_fit:
         version = "craig"
@@ -1532,6 +2217,37 @@ def temperature_delay(temptable, divisor,
                       met_start=None, met_stop=None,
                       debug=False, craig_fit=False,
                       time_resolution=10, version=None, pars=None):
+    """Compute cumulative clock delay from temperature-dependent drift.
+
+    Integrates the clock rate correction (from clock_ppm_model) over time
+    to get the cumulative time delay. Returns an interpolation function
+    that can evaluate the delay at any MET within the range.
+
+    Parameters
+    ----------
+    temptable : astropy.table.Table
+        Temperature table with 'met' and 'temperature_smooth' columns.
+    divisor : int
+        Clock frequency divisor value (nominally ~24000336).
+    met_start, met_stop : float, optional
+        Time range for computation. Defaults to temptable range.
+    debug : bool, optional
+        Reserved for debugging output.
+    craig_fit : bool, optional
+        Use original Craig Markwardt model parameters.
+    time_resolution : float, optional
+        Time step in seconds for integration. Default 10s.
+    version : str, optional
+        Model version identifier.
+    pars : dict, optional
+        Override model parameters.
+
+    Returns
+    -------
+    delay_function : scipy.interpolate.PchipInterpolator
+        Function that returns cumulative clock delay (seconds) for any MET.
+        Can extrapolate beyond the input range.
+    """
     table_times = temptable['met']
 
     if met_start is None:
@@ -1576,6 +2292,48 @@ def temperature_correction_table(met_start, met_stop,
                                  craig_fit=False,
                                  version=None,
                                  pars=None):
+    """Build a table of temperature-based clock corrections.
+
+    This is the main function for computing the temperature-dependent
+    clock correction. It:
+    1. Loads or reads cached correction data if available
+    2. Processes each time interval between frequency divisor changes
+    3. Integrates the clock drift to get cumulative delay
+    4. Handles gaps in temperature data gracefully
+
+    Parameters
+    ----------
+    met_start, met_stop : float
+        Time range (MET) for the correction table.
+    temptable : astropy.table.Table or str, optional
+        Temperature table or path to temperature file. If None, uses default.
+
+    Other parameters
+    ----------------
+    freqchange_file : str, optional
+        Path to frequency changes file. If None, uses default.
+    hdf_dump_file : str, optional
+        Path for caching computed corrections. Set to None to disable caching.
+    force_divisor : int, optional
+        If set, use this divisor value for entire range instead of
+        reading from frequency changes file.
+    time_resolution : float, optional
+        Output table time step in seconds. Default 0.5s.
+    craig_fit : bool, optional
+        Use original Craig Markwardt model.
+    version : str, optional
+        Model version identifier.
+    pars : dict, optional
+        Override model parameters.
+
+    Returns
+    -------
+    table : astropy.table.Table
+        Correction table with columns:
+        - 'met': Mission Elapsed Time
+        - 'temp_corr': Clock correction in seconds (add to event times)
+        - 'divisor': Clock divisor value at each time
+    """
     import six
     if hdf_dump_file is not None and os.path.exists(hdf_dump_file):
         log.info(f"Reading cached data from file {hdf_dump_file}")
@@ -1583,24 +2341,34 @@ def temperature_correction_table(met_start, met_stop,
         result_table = fix_byteorder(Table.read(hdf_dump_file))
         mets = np.array(result_table['met'])
         if (met_start > mets[10] or met_stop < mets[-20]) and (
-                met_stop - met_start < 3 * 365 * 86400):
+                met_stop - met_start < 3 * SECONDS_PER_YEAR):
             log.warning(
                 "Interval not fully included in cached data. Recalculating.")
         else:
-            good = (mets >= met_start - 86400) & (mets < met_stop + 86400)
-            return result_table[good]
+            good = (mets >= met_start - SECONDS_PER_DAY * 2) & (mets < met_stop + SECONDS_PER_DAY * 2)
+
+            filtered_table = filter_and_log_table(
+                result_table,
+                good,
+                intro_text="temperature_correction_table: Filtering cached result_table to requested MET range",
+                comment_to_point="beyond requested range",
+                point_log_func=log.debug
+            )
+            return filtered_table
 
     if temptable is None or isinstance(temptable, six.string_types):
         mjdstart, mjdstop = sec_to_mjd(met_start), sec_to_mjd(met_stop)
+        # Returns table with: 'met', 'temperature', 'mjd', 'temperature_smooth'
         temptable = read_temptable(mjdstart=mjdstart,
                                    mjdstop=mjdstop,
                                    temperature_file=temptable, dt=10)
     if force_divisor is None:
+        # Returns table with: 'uxt', 'met', 'divisor', 'mjd', 'flag'
         freq_changes_table = \
             read_freq_changes_table(freqchange_file=freqchange_file)
         allfreqtimes = np.array(freq_changes_table['met'])
         allfreqtimes = \
-            np.concatenate([allfreqtimes, [allfreqtimes[-1] + 86400]])
+            np.concatenate([allfreqtimes, [temptable['met'][-1]]])
         met_intervals = list(
             zip(allfreqtimes[:-1], allfreqtimes[1:]))
         divisors = freq_changes_table['divisor']
@@ -1630,6 +2398,9 @@ def temperature_correction_table(met_start, met_stop,
             continue
         if met_intv[0] > met_stop:
             break
+        if met_intv[0] > met_intv[1]:
+            log.warning(f"Invalid interval: {met_intv}")
+            continue
 
         start, stop = met_intv
 
@@ -1796,7 +2567,7 @@ def main_update_temptable(args=None):
     if args.outfile is not None and os.path.exists(args.outfile):
         log.info("Reading existing temperature table")
         existing_table = Table.read(args.outfile)
-        last_measurement = existing_table['mjd'][-1] + 0.001 / 86400
+        last_measurement = existing_table['mjd'][-1] + 0.001 / SECONDS_PER_DAY
 
     log.info("Reading new temperature values")
     new_table = read_csv_temptable(temperature_file=args.tempfile,
