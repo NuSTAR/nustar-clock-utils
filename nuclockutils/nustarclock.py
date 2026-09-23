@@ -126,7 +126,7 @@ MALINDI_OUTAGE_INTERVALS = [
 # Known clock jump times (MET) - when frequency divisor was commanded to change
 KNOWN_CLOCK_JUMP_TIMES = np.array([
     78708320, 79657575, 81043985, 82055671, 293346772,
-    392200784, 394825882, 395304135, 407914525, 408299422
+    392200784, 394825882, 395304135, 407914525, 408299422, 525800501
 ])
 
 # Reference epoch for absorption-desorption model
